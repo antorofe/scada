@@ -150,7 +150,7 @@
   .tile .st .led { width: 8px; height: 8px; border-radius: 50%; }
   /* Todas las filas de la rejilla con la misma altura y el mín/máx anclado abajo:
      así queda alineado tanto en los tiles con semáforo como en los que no lo tienen. */
-  #tilesElec { grid-auto-rows: 1fr; }
+  #tilesElec, #histElec { grid-auto-rows: 1fr; }
   .tile .mm { display: flex; gap: 8px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border);
               font-size: 11px; color: var(--ink-2); }
   /* nowrap: si el valor salta de línea, la fila crece y deja de alinearse con el resto */
@@ -364,6 +364,8 @@
     <div class="tile"><div class="label">Corriente máx</div><div class="val tnum"><span id="histImax">—</span><small> A</small></div></div>
     <div class="tile"><div class="label">Muestras</div><div class="val tnum"><span id="histN">—</span></div></div>
   </div>
+  <div class="section-title" style="margin-top:22px">Parámetros eléctricos del periodo</div>
+  <div class="tiles" id="histElec"></div>
   <div class="prodcost">
     <div class="pc-cell">
       <div class="klabel">Kilos producidos en el periodo</div>
@@ -647,18 +649,19 @@ const ENERGY = [
   { key: "inicio_dia", label: "Inicio del día", unit: "h", dec: 0 },
   { key: "inicio_mes", label: "Inicio del mes", unit: "día", dec: 0 },
 ];
-// minMax: añade la fila Mín/Máx del rango seleccionado (solo tiene sentido en los
-// parámetros instantáneos; los tiles de energía son contadores acumulados).
-function buildTiles(container, defs, minMax) {
+// minMax: añade la fila Mín/Máx del periodo (solo tiene sentido en los parámetros
+// instantáneos; los tiles de energía son contadores acumulados).
+// pfx: prefijo de los id, para poder repetir los mismos tiles en Reportes sin colisión.
+function buildTiles(container, defs, minMax, pfx = "") {
   const map = {};
   for (const d of defs) {
     const el = document.createElement("div"); el.className = "tile";
     el.innerHTML = `<div class="label">${d.label}</div>
-      <div class="val tnum"><span id="tv-${d.key}">—</span><small>${d.unit}</small></div>
-      <div id="ts-${d.key}"></div>` + (minMax ? `
+      <div class="val tnum"><span id="${pfx}tv-${d.key}">—</span><small>${d.unit}</small></div>
+      <div id="${pfx}ts-${d.key}"></div>` + (minMax ? `
       <div class="mm">
-        <span>Mín <b class="tnum" id="tmin-${d.key}">—</b></span>
-        <span>Máx <b class="tnum" id="tmax-${d.key}">—</b></span>
+        <span>Mín <b class="tnum" id="${pfx}tmin-${d.key}">—</b></span>
+        <span>Máx <b class="tnum" id="${pfx}tmax-${d.key}">—</b></span>
       </div>` : "");
     container.appendChild(el); map[d.key] = d;
   }
@@ -666,23 +669,31 @@ function buildTiles(container, defs, minMax) {
 }
 const elecMap = buildTiles($("#tilesElec"), ELEC, true);
 const enerMap = buildTiles($("#tilesEnergy"), ENERGY);
+buildTiles($("#histElec"), ELEC, true, "h"); // mismos tiles en Reportes, sobre el periodo consultado
+
+/* Vuelca un resultado de /api/minmax en una tanda de tiles. avg=true → el valor
+   grande es el promedio del periodo (en Reportes no existe un "valor actual"). */
+function fillElecTiles(r, pfx, avg) {
+  for (const d of ELEC) {
+    const sc = (raw) => raw == null ? null : (d.scale ? d.scale(raw) : raw);
+    const dec = d.mmDec != null ? d.mmDec : d.dec;
+    $("#" + pfx + "tmin-" + d.key).textContent = fmt(sc(r[d.key + "_min"]), dec);
+    $("#" + pfx + "tmax-" + d.key).textContent = fmt(sc(r[d.key + "_max"]), dec);
+    if (avg) updateTile(d, r[d.key + "_avg"], pfx);
+  }
+}
 
 /* Mín/máx de los parámetros eléctricos en el rango seleccionado (se calcula en SQL). */
 async function loadMinMax() {
   try {
     const r = await fetch(`/api/minmax?minutes=${windowMin}`).then(x => x.json());
-    for (const d of ELEC) {
-      const sc = (raw) => raw == null ? null : (d.scale ? d.scale(raw) : raw);
-      const dec = d.mmDec != null ? d.mmDec : d.dec;
-      $("#tmin-" + d.key).textContent = fmt(sc(r[d.key + "_min"]), dec);
-      $("#tmax-" + d.key).textContent = fmt(sc(r[d.key + "_max"]), dec);
-    }
+    fillElecTiles(r, "", false);
   } catch (e) { /* se reintenta en el siguiente ciclo */ }
 }
-function updateTile(d, raw) {
+function updateTile(d, raw, pfx = "") {
   const v = raw == null ? null : (d.scale ? d.scale(raw) : raw);
-  $("#tv-" + d.key).textContent = fmt(v, d.dec);
-  const st = $("#ts-" + d.key);
+  $("#" + pfx + "tv-" + d.key).textContent = fmt(v, d.dec);
+  const st = $("#" + pfx + "ts-" + d.key);
   if (d.status && v != null && isFinite(v)) {
     const [cls, label] = d.status(v);
     st.className = "st " + cls; st.innerHTML = `<span class="led"></span>${label}`;
@@ -774,7 +785,12 @@ const histCharts = {};
 for (const c of CHARTS) {
   const card = document.createElement("div"); card.className = "card chart-card";
   card.innerHTML = `<div class="top"><div class="name"><span class="swatch" style="background:var(${c.colorVar})"></span>${c.name}</div></div>
-    <div class="chart-wrap" style="height:240px"><canvas></canvas><div class="tooltip"></div></div>`;
+    <div class="chart-wrap" style="height:240px"><canvas></canvas><div class="tooltip"></div></div>
+    <div class="chart-stats">
+      <span>Mín <b class="tnum" id="hmin-${c.key}">—</b></span>
+      <span>Prom <b class="tnum" id="havg-${c.key}">—</b></span>
+      <span>Máx <b class="tnum" id="hmax-${c.key}">—</b></span>
+    </div>`;
   document.getElementById("histCharts").appendChild(card);
   histCharts[c.key] = new LineChart(card.querySelector("canvas"),
     { colorVar: c.colorVar, unit: c.unit, dec: c.dec, scale: c.scale, tip: card.querySelector(".tooltip") });
@@ -789,14 +805,25 @@ async function runHist() {
   for (const c of CHARTS) histCharts[c.key].setData(r.points.map(p => ({ t: p.t, y: p[c.key] })), range);
   let e = { kwh: 0, avgKw: 0, samples: 0 };
   try { e = await fetch(`/api/energy?from=${from}&to=${to}`).then(x => x.json()); } catch (_) {}
-  let pmax = -Infinity, imax = -Infinity;
-  for (const p of r.points) { if (p.p > pmax) pmax = p.p; if (p.i > imax) imax = p.i; }
+  // Extremos por SQL sobre TODAS las muestras del periodo. Antes se sacaban de
+  // r.points, que viene diezmado a 1200 puntos y se salta los picos reales.
+  let m = null;
+  try { m = await fetch(`/api/minmax?from=${from}&to=${to}`).then(x => x.json()); } catch (_) {}
   $("#histKwh").textContent = fmt(e.kwh, 3);
   $("#histValor").textContent = cfg.kwhValue > 0 ? `${cfg.currency}${fmt(e.kwh * cfg.kwhValue, 0)}` : "—";
   $("#histAvg").textContent = e.samples > 1 ? fmt(e.avgKw, 2) : "—";
-  $("#histPmax").textContent = isFinite(pmax) ? fmt(pmax / 1000, 2) : "—";
-  $("#histImax").textContent = isFinite(imax) ? fmt(imax, 1) : "—";
+  $("#histPmax").textContent = m && m.p_max != null ? fmt(m.p_max / 1000, 2) : "—";
+  $("#histImax").textContent = m && m.i_max != null ? fmt(m.i_max, 1) : "—";
   $("#histN").textContent = e.samples || r.points.length;
+  // Mín/Prom/Máx bajo cada gráfica y tiles de parámetros eléctricos del periodo.
+  for (const c of CHARTS) {
+    const u = c.unit ? " " + c.unit : "";
+    const g = (k) => m && m[c.key + k] != null ? fmt(c.scale(m[c.key + k]), c.dec) + u : "—";
+    $("#hmin-" + c.key).textContent = g("_min");
+    $("#havg-" + c.key).textContent = g("_avg");
+    $("#hmax-" + c.key).textContent = g("_max");
+  }
+  if (m) fillElecTiles(m, "h", true);
   lastHistKwh = e.kwh; updateHistPerKg();
 }
 let lastHistKwh = 0;

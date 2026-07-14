@@ -77,10 +77,15 @@ function history(fromMs, toMs) {
 
 // Mín/máx de los parámetros eléctricos en un periodo. Se resuelve con agregación
 // SQL (no materializa filas en JS), así que da igual que el rango sean 5 min o 24 h.
-const MINMAX_COLS = ['v', 's', 'q', 'cosphi', 'freq', 'thdv', 'thdi'];
+// Incluye i/p/fp además de los parámetros de los tiles: así los extremos del reporte
+// (potencia y corriente máx.) salen de TODAS las muestras y no de la serie diezmada
+// que se manda a la gráfica, que se salta los picos.
+const MINMAX_COLS = ['v', 'i', 'p', 'q', 's', 'fp', 'cosphi', 'freq', 'thdv', 'thdi'];
 function minmax(fromMs, toMs) {
   const d = getDb(); if (!d) return null;
-  const sel = MINMAX_COLS.map(c => `MIN(${c}) AS ${c}_min, MAX(${c}) AS ${c}_max`).join(', ');
+  const sel = MINMAX_COLS
+    .map(c => `MIN(${c}) AS ${c}_min, MAX(${c}) AS ${c}_max, AVG(${c}) AS ${c}_avg`)
+    .join(', ');
   // `v > 0` descarta las lecturas en las que el medidor responde ok pero devuelve
   // todo a cero (fallo puntual del equipo): un solo cero hundiría el mínimo a 0 V.
   return d.prepare(
