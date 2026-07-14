@@ -151,6 +151,18 @@
   /* Todas las filas de la rejilla con la misma altura y el mín/máx anclado abajo:
      así queda alineado tanto en los tiles con semáforo como en los que no lo tienen. */
   #tilesElec, #histElec { grid-auto-rows: 1fr; }
+  /* Tiles destacados del reporte: la energía y su valor son la conclusión del informe.
+     Ocupan doble ancho (el número no cabía en uno) y llevan el color del acento. */
+  .tile.hero { grid-column: span 2; }
+  .tile.hero .label { color: var(--hero); }
+  .tile.hero .val { font-size: 34px; color: var(--hero); }
+  .tile.hero .val small { color: var(--hero); opacity: .8; }
+  .tile.hero-e { --hero: var(--brand-b);
+    background: linear-gradient(0deg, rgba(42,127,228,.09), rgba(42,127,228,.09)), var(--card);
+    box-shadow: inset 0 0 0 1.5px rgba(42,127,228,.35), var(--shadow); }
+  .tile.hero-v { --hero: var(--good);
+    background: linear-gradient(0deg, rgba(12,163,12,.09), rgba(12,163,12,.09)), var(--card);
+    box-shadow: inset 0 0 0 1.5px rgba(12,163,12,.35), var(--shadow); }
   .tile .mm { display: flex; gap: 8px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border);
               font-size: 11px; color: var(--ink-2); }
   /* nowrap: si el valor salta de línea, la fila crece y deja de alinearse con el resto */
@@ -357,8 +369,8 @@
     </div>
   </div>
   <div class="tiles" id="histSummary" style="margin-top:16px">
-    <div class="tile"><div class="label">Energía del periodo</div><div class="val tnum"><span id="histKwh">—</span><small> kWh</small></div></div>
-    <div class="tile"><div class="label">Valor</div><div class="val tnum"><span id="histValor">—</span></div></div>
+    <div class="tile hero hero-e"><div class="label">Energía del periodo</div><div class="val tnum"><span id="histKwh">—</span><small> kWh</small></div></div>
+    <div class="tile hero hero-v"><div class="label">Valor</div><div class="val tnum"><span id="histValor">—</span></div></div>
     <div class="tile"><div class="label">Potencia media</div><div class="val tnum"><span id="histAvg">—</span><small> kW</small></div></div>
     <div class="tile"><div class="label">Potencia máx</div><div class="val tnum"><span id="histPmax">—</span><small> kW</small></div></div>
     <div class="tile"><div class="label">Corriente máx</div><div class="val tnum"><span id="histImax">—</span><small> A</small></div></div>
