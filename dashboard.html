@@ -672,14 +672,15 @@ const enerMap = buildTiles($("#tilesEnergy"), ENERGY);
 buildTiles($("#histElec"), ELEC, true, "h"); // mismos tiles en Reportes, sobre el periodo consultado
 
 /* Vuelca un resultado de /api/minmax en una tanda de tiles. avg=true → el valor
-   grande es el promedio del periodo (en Reportes no existe un "valor actual"). */
+   grande es el promedio del periodo (en Reportes no existe un "valor actual").
+   Sin semáforo: el estado describe el instante actual y no un periodo cerrado. */
 function fillElecTiles(r, pfx, avg) {
   for (const d of ELEC) {
     const sc = (raw) => raw == null ? null : (d.scale ? d.scale(raw) : raw);
     const dec = d.mmDec != null ? d.mmDec : d.dec;
     $("#" + pfx + "tmin-" + d.key).textContent = fmt(sc(r[d.key + "_min"]), dec);
     $("#" + pfx + "tmax-" + d.key).textContent = fmt(sc(r[d.key + "_max"]), dec);
-    if (avg) updateTile(d, r[d.key + "_avg"], pfx);
+    if (avg) $("#" + pfx + "tv-" + d.key).textContent = fmt(sc(r[d.key + "_avg"]), d.dec);
   }
 }
 
