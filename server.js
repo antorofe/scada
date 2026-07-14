@@ -75,6 +75,20 @@ function history(fromMs, toMs) {
   return rows;
 }
 
+// Mín/máx de los parámetros eléctricos en un periodo. Se resuelve con agregación
+// SQL (no materializa filas en JS), así que da igual que el rango sean 5 min o 24 h.
+const MINMAX_COLS = ['v', 's', 'q', 'cosphi', 'freq', 'thdv', 'thdi'];
+function minmax(fromMs, toMs) {
+  const d = getDb(); if (!d) return null;
+  const sel = MINMAX_COLS.map(c => `MIN(${c}) AS ${c}_min, MAX(${c}) AS ${c}_max`).join(', ');
+  // `v > 0` descarta las lecturas en las que el medidor responde ok pero devuelve
+  // todo a cero (fallo puntual del equipo): un solo cero hundiría el mínimo a 0 V.
+  return d.prepare(
+    `SELECT ${sel}, COUNT(*) AS samples FROM readings
+      WHERE ts_unix_ms >= ? AND ts_unix_ms <= ? AND ok = 1 AND v > 0`
+  ).get(fromMs, toMs) || null;
+}
+
 // Integra la potencia activa (W) en el tiempo → energía (kWh).
 // Usa agregación SQL (SUM/COUNT/MIN/MAX): O(filas) en el motor, sin materializar
 // filas en JS → escala a millones de registros (mes/año) sin coste por segundo.
@@ -131,6 +145,17 @@ const server = http.createServer((req, res) => {
         from = Date.now() - minutes * 60000;
       }
       return json(res, 200, { from, to, points: history(from, to) });
+    }
+    if (url.pathname === '/api/minmax') {
+      let from, to = Date.now();
+      if (url.searchParams.has('from')) {
+        from = parseInt(url.searchParams.get('from'), 10);
+        to = parseInt(url.searchParams.get('to') || String(Date.now()), 10);
+      } else {
+        const minutes = Math.min(1440, Math.max(1, parseInt(url.searchParams.get('minutes') || '5', 10)));
+        from = Date.now() - minutes * 60000;
+      }
+      return json(res, 200, { from, to, ...(minmax(from, to) || {}) });
     }
     if (url.pathname === '/api/energy') {
       const from = parseInt(url.searchParams.get('from') || '0', 10);

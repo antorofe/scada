@@ -147,6 +147,10 @@
   .tile .val small { font-size: 12.5px; font-weight: 600; color: var(--ink-2); margin-left: 3px; }
   .tile .st { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 11.5px; font-weight: 700; }
   .tile .st .led { width: 8px; height: 8px; border-radius: 50%; }
+  .tile .mm { display: flex; gap: 10px; margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--border);
+              font-size: 11.5px; color: var(--ink-2); }
+  .tile .mm span { flex: 1; }
+  .tile .mm b { color: var(--ink-1); font-weight: 700; margin-left: 3px; }
   .st.good{color:var(--good)} .st.warn{color:var(--warn)} .st.serious{color:var(--serious)} .st.critical{color:var(--critical)}
   .st.good .led{background:var(--good)} .st.warn .led{background:var(--warn)} .st.serious .led{background:var(--serious)} .st.critical .led{background:var(--critical)}
 
@@ -637,19 +641,37 @@ const ENERGY = [
   { key: "inicio_dia", label: "Inicio del día", unit: "h", dec: 0 },
   { key: "inicio_mes", label: "Inicio del mes", unit: "día", dec: 0 },
 ];
-function buildTiles(container, defs) {
+// minMax: añade la fila Mín/Máx del rango seleccionado (solo tiene sentido en los
+// parámetros instantáneos; los tiles de energía son contadores acumulados).
+function buildTiles(container, defs, minMax) {
   const map = {};
   for (const d of defs) {
     const el = document.createElement("div"); el.className = "tile";
     el.innerHTML = `<div class="label">${d.label}</div>
       <div class="val tnum"><span id="tv-${d.key}">—</span><small>${d.unit}</small></div>
-      <div id="ts-${d.key}"></div>`;
+      <div id="ts-${d.key}"></div>` + (minMax ? `
+      <div class="mm">
+        <span>Mín <b class="tnum" id="tmin-${d.key}">—</b></span>
+        <span>Máx <b class="tnum" id="tmax-${d.key}">—</b></span>
+      </div>` : "");
     container.appendChild(el); map[d.key] = d;
   }
   return map;
 }
-const elecMap = buildTiles($("#tilesElec"), ELEC);
+const elecMap = buildTiles($("#tilesElec"), ELEC, true);
 const enerMap = buildTiles($("#tilesEnergy"), ENERGY);
+
+/* Mín/máx de los parámetros eléctricos en el rango seleccionado (se calcula en SQL). */
+async function loadMinMax() {
+  try {
+    const r = await fetch(`/api/minmax?minutes=${windowMin}`).then(x => x.json());
+    for (const d of ELEC) {
+      const sc = (raw) => raw == null ? null : (d.scale ? d.scale(raw) : raw);
+      $("#tmin-" + d.key).textContent = fmt(sc(r[d.key + "_min"]), d.dec);
+      $("#tmax-" + d.key).textContent = fmt(sc(r[d.key + "_max"]), d.dec);
+    }
+  } catch (e) { /* se reintenta en el siguiente ciclo */ }
+}
 function updateTile(d, raw) {
   const v = raw == null ? null : (d.scale ? d.scale(raw) : raw);
   $("#tv-" + d.key).textContent = fmt(v, d.dec);
@@ -852,6 +874,7 @@ async function loadHistory(min) {
     for (const c of CHARTS) charts[c.key].setData(r.points.map(p => ({ t: p.t, y: p[c.key] })));
     updateChartStats();
   } catch (e) { /* se rellenará con /latest */ }
+  loadMinMax(); // el mín/máx de los tiles sigue el mismo rango que las gráficas
 }
 
 async function poll() {
@@ -993,6 +1016,7 @@ setInterval(loadConfig, 5000); // refresca el valor en línea para todas las pan
 loadHistory(30);
 poll();
 setInterval(poll, 1000);
+setInterval(loadMinMax, 10000); // agregado SQL: cada 10 s basta y no castiga la base
 </script>
 </body>
 </html>
