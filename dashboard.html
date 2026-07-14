@@ -287,7 +287,6 @@
 <main id="cfgView" hidden>
   <div class="section-title">Configuración</div>
   <div class="card cfg">
-    <button class="btn-reset" id="btnBack" style="margin-bottom:16px">← Volver al monitoreo</button>
     <div class="cfg-block">
       <h3>Medición de energía</h3>
       <div class="cfg-row">
@@ -357,7 +356,6 @@
 <main id="histView" hidden>
   <div class="section-title">Reportes — comportamiento por fecha</div>
   <div class="card">
-    <button class="btn-reset" id="btnBackHist" style="margin-bottom:16px">← Volver al monitoreo</button>
     <div class="hist-controls">
       <label>Desde<input type="datetime-local" id="histFrom" step="1"></label>
       <label>Hasta<input type="datetime-local" id="histTo" step="1"></label>
@@ -902,8 +900,6 @@ function showView(v) {
 }
 $("#topnav").addEventListener("click", (e) => { const b = e.target.closest("[data-view]"); if (b) showView(b.dataset.view); });
 $("#btnEditDev").addEventListener("click", () => showView("config"));   // editar config desde la barra del medidor
-$("#btnBack").addEventListener("click", () => showView("dash"));
-$("#btnBackHist").addEventListener("click", () => showView("dash"));
 { const h = location.hash.replace("#", ""); if (h) showView(h); }        // deep-link (#reportes, #proceso, #config)
 
 /* ---------- Conexión y ciclo ---------- */
