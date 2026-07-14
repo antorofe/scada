@@ -179,45 +179,6 @@ node tools/modbus-regscan.js --fn 3 --from 0 --to 300
 
 ---
 
-## HTTPS
-
-El servidor activa TLS **solo si encuentra el par de certificados** en `certs/`
-(`cert.pem` + `key.pem`). Si están:
-
-- el panel se sirve por **HTTPS en el 443**,
-- y el **puerto 80 redirige** (302) a HTTPS.
-
-Si no están, sigue sirviendo por HTTP como siempre: un clon recién hecho arranca
-sin preparar nada.
-
-### Generar el certificado (autofirmado)
-
-`certs/` está en `.gitignore`: **la clave privada no se versiona nunca** y se genera
-en cada servidor.
-
-```bash
-mkdir -p certs && chmod 700 certs
-openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-  -keyout certs/key.pem -out certs/cert.pem \
-  -subj "/C=CL/O=Grupo SEGRA/CN=segra-plc" \
-  -addext "subjectAltName=IP:192.168.0.56,DNS:segra-plc,DNS:localhost,IP:127.0.0.1" \
-  -addext "keyUsage=digitalSignature,keyEncipherment" \
-  -addext "extendedKeyUsage=serverAuth"
-chmod 600 certs/key.pem
-```
-
-> **El `subjectAltName` con la IP es obligatorio.** Los navegadores modernos ignoran
-> el `CN`; sin SAN el certificado se rechaza aunque sea válido. Si cambia la IP del
-> servidor, hay que regenerarlo.
-
-Al ser autofirmado, el navegador avisa (`ERR_CERT_AUTHORITY_INVALID`) y hay que
-aceptar la excepción una vez por equipo. Para eliminar el aviso habría que firmar el
-certificado con una CA propia e instalarla en los equipos.
-
-El puerto 443 no necesita root: el servicio ya tiene `CAP_NET_BIND_SERVICE`.
-
----
-
 ## Despliegue a un servidor externo
 
 Ver **[docs/DEPLOY.md](docs/DEPLOY.md)**.

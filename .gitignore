@@ -7,9 +7,5 @@ pfw03.db-wal
 *.out
 *.log
 
-# Certificados TLS: la clave privada NUNCA se versiona.
-# Se generan en cada servidor (ver README, sección HTTPS).
-certs/
-
 # Node
 node_modules/

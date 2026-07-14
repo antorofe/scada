@@ -8,7 +8,6 @@
  * Luego abre  http://localhost:8080  (o la IP del servidor en la intranet).
  */
 const http = require('http');
-const https = require('https');
 const fs = require('fs');
 const pathm = require('path');
 const { DatabaseSync } = require('node:sqlite');
@@ -17,18 +16,7 @@ const a = process.argv.slice(2);
 const arg = (n, d) => { const i = a.indexOf('--' + n); return i >= 0 ? a[i + 1] : d; };
 const DB_PATH = arg('db', pathm.join(__dirname, 'pfw03.db'));
 const HTTP_PORT = parseInt(arg('http-port', '8080'), 10);
-const HTTPS_PORT = parseInt(arg('https-port', '443'), 10);
 const HTML_FILE = pathm.join(__dirname, 'dashboard.html');
-
-// TLS opcional: si existe el par de certificados, el panel pasa a HTTPS y el puerto
-// HTTP queda solo para redirigir. Si no existe, sigue sirviendo por HTTP como siempre
-// (así el proyecto arranca en un servidor recién clonado sin preparar nada).
-const CERT_DIR = arg('certs', pathm.join(__dirname, 'certs'));
-const CERT_FILE = pathm.join(CERT_DIR, 'cert.pem');
-const KEY_FILE = pathm.join(CERT_DIR, 'key.pem');
-const tls = (fs.existsSync(CERT_FILE) && fs.existsSync(KEY_FILE))
-  ? { cert: fs.readFileSync(CERT_FILE), key: fs.readFileSync(KEY_FILE) }
-  : null;
 
 // ---- Configuración persistente (config.json) ----
 const CONFIG_PATH = pathm.join(__dirname, 'config.json');
@@ -128,7 +116,7 @@ function energy(fromMs, toMs) {
   return { kwh, samples: n, durationMs: r.mx - r.mn, avgKw, from: r.mn, to: r.mx };
 }
 
-const handler = (req, res) => {
+const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   try {
     if (url.pathname === '/' || url.pathname === '/index.html') {
@@ -216,30 +204,10 @@ const handler = (req, res) => {
   } catch (e) {
     json(res, 500, { error: e.message });
   }
-};
+});
 
-const dbNote = `  BD: ${DB_PATH}${fs.existsSync(DB_PATH) ? '' : '  (aún no existe: arranca el logger)'}`;
-
-if (tls) {
-  https.createServer(tls, handler).listen(HTTPS_PORT, () => {
-    console.log(`SCADA SEGRA — dashboard escuchando en https://localhost:${HTTPS_PORT}`);
-    console.log(dbNote);
-    console.log(`  Abre https://<ip-del-servidor> desde la intranet.`);
-  });
-  // El puerto HTTP solo redirige. 302 (no 301) a propósito: si algún día se vuelve
-  // a HTTP, un 301 quedaría cacheado en los navegadores y seguirían saltando a HTTPS.
-  http.createServer((req, res) => {
-    const host = (req.headers.host || '').split(':')[0];
-    const port = HTTPS_PORT === 443 ? '' : ':' + HTTPS_PORT;
-    res.writeHead(302, { Location: `https://${host}${port}${req.url}` });
-    res.end();
-  }).listen(HTTP_PORT, () => {
-    console.log(`  (http://…:${HTTP_PORT} redirige a HTTPS)`);
-  });
-} else {
-  http.createServer(handler).listen(HTTP_PORT, () => {
-    console.log(`SCADA SEGRA — dashboard escuchando en http://localhost:${HTTP_PORT}`);
-    console.log(dbNote);
-    console.log(`  Sin TLS: no hay certificados en ${CERT_DIR} (ver README, sección HTTPS).`);
-  });
-}
+server.listen(HTTP_PORT, () => {
+  console.log(`SCADA SEGRA — dashboard escuchando en http://localhost:${HTTP_PORT}`);
+  console.log(`  BD: ${DB_PATH}${fs.existsSync(DB_PATH) ? '' : '  (aún no existe: arranca el logger)'}`);
+  console.log(`  Abre esa URL en el navegador (o http://<ip-del-servidor>:${HTTP_PORT} desde la intranet).`);
+});
