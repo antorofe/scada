@@ -411,7 +411,7 @@
       <div class="meas shift">
         <div class="bigcol">
           <div class="klabel">Energía del turno</div>
-          <div class="big tnum" style="color:var(--series-i)"><span id="shiftKwh">0.000</span><small>kWh</small></div>
+          <div class="big tnum" style="color:var(--series-i)"><span id="shiftKwh">0,00</span><small>kWh</small></div>
         </div>
         <div class="bigcol">
           <div class="klabel">Valor acumulado</div>
@@ -430,7 +430,7 @@
       <div class="meas shift">
         <div class="bigcol">
           <div class="klabel">Energía del mes</div>
-          <div class="big tnum" style="color:var(--series-p)"><span id="monthKwh">0.000</span><small>kWh</small></div>
+          <div class="big tnum" style="color:var(--series-p)"><span id="monthKwh">0,00</span><small>kWh</small></div>
         </div>
         <div class="bigcol">
           <div class="klabel">Valor acumulado</div>
@@ -450,7 +450,7 @@
     <div class="meas">
       <div class="bigcol">
         <div class="klabel">Energía medida</div>
-        <div class="big tnum"><span id="measKwh">0.000</span><small>kWh</small></div>
+        <div class="big tnum"><span id="measKwh">0,00</span><small>kWh</small></div>
         <div class="sub" id="measState">Sin medición activa</div>
       </div>
       <div class="bigcol">
@@ -658,10 +658,10 @@ const ELEC = [
   { key: "thdi", label: "THD Corriente", unit: "%", dec: 2, status: (v) => v < 8 ? ["good","Bajo"] : v < 15 ? ["warn","Elevado"] : ["serious","Alto"] },
 ];
 const ENERGY = [
-  { key: "kwh", label: "Energía activa", unit: "kWh", dec: 3 },
-  { key: "kwh_e", label: "Energía activa E.", unit: "kWh", dec: 3 },
-  { key: "kvarh_i", label: "Reactiva ind.", unit: "kVArh", dec: 3 },
-  { key: "kvarh_c", label: "Reactiva cap.", unit: "kVArh", dec: 3 },
+  { key: "kwh", label: "Energía activa", unit: "kWh", dec: 2 },
+  { key: "kwh_e", label: "Energía activa E.", unit: "kWh", dec: 2 },
+  { key: "kvarh_i", label: "Reactiva ind.", unit: "kVArh", dec: 2 },
+  { key: "kvarh_c", label: "Reactiva cap.", unit: "kVArh", dec: 2 },
   { key: "inicio_dia", label: "Inicio del día", unit: "h", dec: 0 },
   { key: "inicio_mes", label: "Inicio del mes", unit: "día", dec: 0 },
 ];
@@ -767,7 +767,7 @@ async function refreshShift() {
   $("#shiftRange").textContent = `${fmtDM(start)} → ${fmtDM(end)}`;
   try {
     const e = await fetch(`/api/energy?from=${start}&to=${now}`).then(x => x.json());
-    $("#shiftKwh").textContent = fmt(e.kwh, 3);
+    $("#shiftKwh").textContent = fmt(e.kwh, 2);
     $("#shiftAvg").textContent = e.samples > 1 ? fmt(e.avgKw, 2) : "—";
     setValor("shiftValor", cfg.kwhValue > 0 ? `${cfg.currency}${fmt(e.kwh * cfg.kwhValue, 0)}` : "—");
   } catch (_) {}
@@ -793,7 +793,7 @@ async function refreshMonth() {
   $("#monthRange").textContent = `${fmtDia(start)} → ${fmtDia(end - 86400000)}`;
   try {
     const e = await fetch(`/api/energy?from=${start}&to=${now}`).then(x => x.json());
-    $("#monthKwh").textContent = fmt(e.kwh, 3);
+    $("#monthKwh").textContent = fmt(e.kwh, 2);
     $("#monthAvg").textContent = e.samples > 1 ? fmt(e.avgKw, 2) : "—";
     setValor("monthValor", cfg.kwhValue > 0 ? `${cfg.currency}${fmt(e.kwh * cfg.kwhValue, 0)}` : "—");
   } catch (_) {}
@@ -832,7 +832,7 @@ async function runHist() {
   // r.points, que viene diezmado a 1200 puntos y se salta los picos reales.
   let m = null;
   try { m = await fetch(`/api/minmax?from=${from}&to=${to}`).then(x => x.json()); } catch (_) {}
-  $("#histKwh").textContent = fmt(e.kwh, 3);
+  $("#histKwh").textContent = fmt(e.kwh, 2);
   $("#histValor").textContent = cfg.kwhValue > 0 ? `${cfg.currency}${fmt(e.kwh * cfg.kwhValue, 0)}` : "—";
   $("#histAvg").textContent = e.samples > 1 ? fmt(e.avgKw, 2) : "—";
   $("#histPmax").textContent = m && m.p_max != null ? fmt(m.p_max / 1000, 2) : "—";
@@ -1031,12 +1031,12 @@ function renderSessButtons() {
     : "Sin medición activa";
 }
 async function refreshEnergy() {
-  if (!sess) { lastKwh = 0; $("#measKwh").textContent = "0.000"; $("#measDur").textContent = "00:00:00"; $("#measAvg").textContent = "—"; updateValue(); return; }
+  if (!sess) { lastKwh = 0; $("#measKwh").textContent = "0,00"; $("#measDur").textContent = "00:00:00"; $("#measAvg").textContent = "—"; updateValue(); return; }
   const to = sess.active ? Date.now() : sess.endMs;
   try {
     const e = await fetch(`/api/energy?from=${sess.startMs}&to=${to}`).then(x => x.json());
     lastKwh = e.kwh;
-    $("#measKwh").textContent = fmt(e.kwh, 3);
+    $("#measKwh").textContent = fmt(e.kwh, 2);
     $("#measDur").textContent = fmtDur((sess.active ? Date.now() : sess.endMs) - sess.startMs);
     $("#measAvg").textContent = e.samples > 1 ? fmt(e.avgKw, 2) : "—";
     updateValue();
