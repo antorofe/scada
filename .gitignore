@@ -1,0 +1,11 @@
+# Base de datos SQLite (se genera en cada servidor, no se versiona)
+pfw03.db
+pfw03.db-shm
+pfw03.db-wal
+
+# Logs de ejecución
+*.out
+*.log
+
+# Node
+node_modules/

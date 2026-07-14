@@ -1,0 +1,17 @@
+{
+  "name": "scada-segra-energia",
+  "version": "1.0.0",
+  "description": "SCADA SEGRA — Módulo de Energía. Adquisición Modbus del medidor WEG PFW03-M12 vía conversor EBYTE, almacenamiento en SQLite y panel de monitoreo web.",
+  "type": "commonjs",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "logger": "node --experimental-sqlite logger.js",
+    "server": "node --experimental-sqlite server.js",
+    "read": "node tools/pfw03.js"
+  },
+  "author": "Grupo SEGRA",
+  "license": "UNLICENSED"
+}

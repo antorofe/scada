@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SCADA SEGRA · Energía</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='14'%20fill='%23fff'/%3E%3Ccircle%20cx='17'%20cy='32'%20r='8'%20fill='%233fb34f'/%3E%3Ccircle%20cx='32'%20cy='32'%20r='8'%20fill='%23f4c430'/%3E%3Ccircle%20cx='47'%20cy='32'%20r='8'%20fill='%23e6822e'/%3E%3C/svg%3E" />
+<style>
+  :root {
+    /* Marca SEGRA */
+    --brand-a: #1657c8; --brand-b: #2a7fe4;
+    /* Superficies e ink (light) */
+    --page: #eef1f6; --card: #ffffff;
+    --ink-1: #16233b; --ink-2: #5b6b82; --ink-muted: #8a97a8;
+    --grid: #e6ebf1; --axis: #cdd6e0; --border: rgba(16,35,59,0.10);
+    /* Series (validadas sobre superficie clara) */
+    --series-p: #2a78d6;   /* Potencia activa */
+    --series-i: #eb6834;   /* Corriente */
+    --series-fp: #0a8f3c;  /* Factor de potencia */
+    /* Estado */
+    --good: #0ca30c; --warn: #e6a000; --serious: #ec7a3c; --critical: #d03b3b;
+    --shadow: 0 1px 3px rgba(16,35,59,.08), 0 1px 2px rgba(16,35,59,.04);
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0d1117; --card: #161b22;
+      --ink-1: #f0f3f7; --ink-2: #9fb0c3; --ink-muted: #6c7a8c;
+      --grid: #232a33; --axis: #313a45; --border: rgba(255,255,255,0.09);
+      --series-p: #3987e5; --series-i: #e2743e; --series-fp: #22a651;
+      --good: #2fbf2f; --warn: #f2b423; --serious: #ef8b52; --critical: #e05a5a;
+      --shadow: 0 1px 3px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--page); color: var(--ink-1);
+    font-size: 14px; -webkit-font-smoothing: antialiased;
+  }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* Cabecera */
+  header {
+    background: linear-gradient(90deg, var(--brand-a), var(--brand-b));
+    color: #fff; padding: 14px 22px; display: flex; align-items: center;
+    justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 13px; }
+  .brand .logo { height: 46px; width: auto; border-radius: 9px; background: #fff; padding: 3px 6px; display: block; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+  .brand .dots { display: flex; gap: 4px; }
+  .brand .dots i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+  .brand h1 { font-size: 19px; margin: 0; font-weight: 700; letter-spacing: .3px; }
+  .brand .sub { font-size: 12px; opacity: .85; margin-top: 1px; }
+  .hstatus { display: flex; align-items: center; gap: 14px; }
+  .clock { font-size: 15px; font-weight: 600; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px;
+    border-radius: 999px; font-size: 12.5px; font-weight: 700; background: rgba(255,255,255,.16);
+  }
+  .pill .led { width: 9px; height: 9px; border-radius: 50%; background: #9be59b; box-shadow: 0 0 0 0 rgba(155,229,155,.7); }
+  .pill.on .led { animation: pulse 1.8s infinite; }
+  .pill.stale { background: rgba(255,220,120,.22); } .pill.stale .led { background: #ffd66b; animation: none; }
+  .pill.off { background: rgba(255,120,120,.24); } .pill.off .led { background: #ff8a8a; animation: none; }
+  .gear { background: rgba(255,255,255,.16); color:#fff; border:0; width:34px; height:34px; border-radius:9px; cursor:pointer; font-size:17px; line-height:1; }
+  .gear:hover { background: rgba(255,255,255,.28); }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(155,229,155,.6)} 70%{box-shadow:0 0 0 7px rgba(155,229,155,0)} 100%{box-shadow:0 0 0 0 rgba(155,229,155,0)} }
+
+  /* Menú de navegación */
+  .topnav { display: flex; gap: 2px; background: var(--card); border-bottom: 1px solid var(--border); padding: 0 12px; overflow-x: auto; }
+  .topnav button { border: 0; background: transparent; color: var(--ink-2); font: inherit; font-size: 13.5px; font-weight: 600; padding: 13px 16px; cursor: pointer; border-bottom: 3px solid transparent; white-space: nowrap; }
+  .topnav button:hover { color: var(--ink-1); background: color-mix(in srgb, var(--brand-b) 6%, transparent); }
+  .topnav button.active { color: var(--brand-b); border-bottom-color: var(--brand-b); }
+  @media (prefers-color-scheme: dark){ .topnav button.active { color: var(--series-p); border-bottom-color: var(--series-p); } }
+
+  /* Enlace de edición del dispositivo */
+  .devstate { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 12px; padding: 3px 10px; border-radius: 999px; margin-right: 6px; }
+  .devstate .led { width: 8px; height: 8px; border-radius: 50%; }
+  .devstate.on { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+  .devstate.on .led { background: var(--good); box-shadow: 0 0 0 0 var(--good); animation: pulse3 1.8s infinite; }
+  .devstate.off { color: var(--critical); background: color-mix(in srgb, var(--critical) 14%, transparent); }
+  .devstate.off .led { background: var(--critical); }
+  @keyframes pulse3 { 0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--good) 55%,transparent)} 70%{box-shadow:0 0 0 6px transparent} 100%{box-shadow:0 0 0 0 transparent} }
+  .editlink { color: var(--brand-b); font-weight: 700; cursor: pointer; margin-left: 8px; white-space: nowrap; }
+  .editlink:hover { text-decoration: underline; }
+  @media (prefers-color-scheme: dark){ .editlink { color: var(--series-p); } }
+
+  /* Tabla de dispositivos */
+  .devtable { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .devtable th, .devtable td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--border); }
+  .devtable th { color: var(--ink-2); font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+  .devtable tbody tr:hover { background: color-mix(in srgb, var(--brand-b) 5%, transparent); }
+  .devinp { border: 1px solid var(--axis); border-radius: 7px; padding: 6px 9px; font: inherit; font-size: 13px; background: var(--card); color: var(--ink-1); }
+
+  /* Sub-barra */
+  .subbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 10px 22px; background: var(--card); border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .devinfo { color: var(--ink-2); font-size: 12.5px; }
+  .devinfo b { color: var(--ink-1); }
+  .ranges { display: flex; gap: 6px; }
+  .ranges button {
+    border: 1px solid var(--border); background: transparent; color: var(--ink-2);
+    padding: 5px 12px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600;
+  }
+  .ranges button.active { background: var(--brand-b); color: #fff; border-color: var(--brand-b); }
+
+  main { padding: 18px 22px 40px; max-width: 1500px; margin: 0 auto; }
+  .section-title {
+    display: flex; align-items: center; gap: 9px; margin: 22px 4px 12px;
+    font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--ink-2);
+  }
+  .section-title::before { content: ""; width: 4px; height: 15px; border-radius: 2px; background: var(--brand-b); }
+  .section-title:first-child { margin-top: 4px; }
+
+  /* Gráficas */
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 14px 16px;
+  }
+  .chart-card .top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+  .chart-card .name { font-size: 13.5px; font-weight: 700; color: var(--ink-1); display: flex; align-items: center; gap: 8px; }
+  .chart-card .name .swatch { width: 10px; height: 10px; border-radius: 3px; }
+  .chart-card .now { font-size: 26px; font-weight: 700; letter-spacing: -.5px; }
+  .chart-card .now small { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-left: 3px; }
+  .chart-wrap { position: relative; height: 190px; }
+  .chart-stats { display: flex; gap: 16px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); font-size: 12px; color: var(--ink-2); }
+  .chart-stats span { flex: 1; text-align: center; }
+  .chart-stats b { color: var(--ink-1); font-weight: 700; margin-left: 3px; }
+  canvas { width: 100%; height: 100%; display: block; }
+  .tooltip {
+    position: absolute; pointer-events: none; background: var(--card); border: 1px solid var(--border);
+    box-shadow: var(--shadow); border-radius: 8px; padding: 6px 9px; font-size: 12px; display: none;
+    color: var(--ink-1); white-space: nowrap; z-index: 5;
+  }
+  .tooltip .t { color: var(--ink-muted); font-size: 11px; }
+
+  /* Tiles */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; }
+  .tile { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 13px 15px; }
+  .tile .label { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+  .tile .val { font-size: 25px; font-weight: 700; margin-top: 6px; letter-spacing: -.5px; }
+  .tile .val small { font-size: 12.5px; font-weight: 600; color: var(--ink-2); margin-left: 3px; }
+  .tile .st { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 11.5px; font-weight: 700; }
+  .tile .st .led { width: 8px; height: 8px; border-radius: 50%; }
+  .st.good{color:var(--good)} .st.warn{color:var(--warn)} .st.serious{color:var(--serious)} .st.critical{color:var(--critical)}
+  .st.good .led{background:var(--good)} .st.warn .led{background:var(--warn)} .st.serious .led{background:var(--serious)} .st.critical .led{background:var(--critical)}
+
+  .note { display:flex; gap:9px; align-items:flex-start; background: color-mix(in srgb, var(--warn) 12%, var(--card));
+    border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--border)); border-radius: 10px; padding: 10px 13px;
+    font-size: 12.5px; color: var(--ink-1); margin-bottom: 12px; }
+  .note b { color: var(--warn); }
+
+  /* Medición de energía */
+  .meas { display: grid; grid-template-columns: 1.1fr 1fr .85fr .85fr auto; gap: 18px; align-items: center; }
+  @media (max-width: 1100px){ .meas { grid-template-columns: 1fr 1fr 1fr; } }
+  @media (max-width: 720px){ .meas { grid-template-columns: 1fr 1fr; } }
+  .meas .klabel { font-size: 12px; color: var(--ink-2); font-weight: 600; margin-bottom: 3px; }
+  .meas .mlabel { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+  .meas .big { font-size: 40px; font-weight: 800; letter-spacing: -1px; line-height: 1; color: var(--series-p); }
+  .meas .big small { font-size: 16px; font-weight: 700; color: var(--ink-2); margin-left: 5px; }
+  .meas .sub { font-size: 12px; color: var(--ink-2); font-weight: 600; margin-top: 5px; }
+  .meas .metric .mv { font-size: 22px; font-weight: 700; margin-top: 2px; }
+  .meas .metric .mv small { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+  .meas .actions { display: flex; flex-direction: column; gap: 8px; }
+  .btn { border: 0; border-radius: 9px; padding: 11px 20px; font: inherit; font-weight: 700; font-size: 13.5px; cursor: pointer; color: #fff; display:flex; align-items:center; gap:8px; justify-content:center; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-start { background: var(--good); } .btn-stop { background: var(--critical); }
+  .btn-reset { background: transparent; color: var(--ink-2); border: 1px solid var(--border); padding: 7px 14px; font-size: 12px; }
+  .rec { display:inline-flex; align-items:center; gap:7px; font-size:12px; font-weight:700; color: var(--critical); }
+  .rec .led { width:9px; height:9px; border-radius:50%; background: var(--critical); animation: pulse2 1.2s infinite; }
+  @keyframes pulse2 { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+  /* Producción / precio por kilo (medición manual) */
+  .prodcost { display: flex; align-items: center; gap: 26px; margin-top: 16px; padding: 14px 16px; border-radius: 10px;
+    background: color-mix(in srgb, var(--brand-b) 7%, var(--card)); border: 1px solid color-mix(in srgb, var(--brand-b) 22%, var(--border)); flex-wrap: wrap; }
+  .prodcost .pc-inp { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .prodcost .pc-inp input { width: 150px; border: 1px solid var(--axis); border-radius: 8px; padding: 10px 12px; font: inherit; font-size: 20px; font-weight: 700; background: var(--card); color: var(--ink-1); font-variant-numeric: tabular-nums; }
+  .prodcost .pc-inp span { color: var(--ink-2); font-weight: 600; }
+  .prodcost .pc-arrow { font-size: 24px; color: var(--ink-muted); }
+  .prodcost .pc-cell .big { font-size: 58px; letter-spacing: -1.5px; }
+  .prodcost .pc-cell .big small { font-size: 20px; }
+
+  /* Configuración */
+  .cfg { max-width: 940px; }
+  .cfg-block h3 { margin: 4px 0 14px; font-size: 15px; color: var(--ink-1); }
+  .cfg-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding: 14px 0; border-top: 1px solid var(--border); }
+  .cfg-row label { font-weight: 600; color: var(--ink-1); display: flex; flex-direction: column; gap: 4px; }
+  .cfg-row .hint { font-weight: 500; color: var(--ink-2); font-size: 12px; max-width: 320px; }
+  .cfg-input { display: flex; align-items: center; gap: 8px; }
+  .cfg-input input { border: 1px solid var(--axis); border-radius: 8px; padding: 9px 11px; font: inherit; font-size: 15px; background: var(--card); color: var(--ink-1); font-variant-numeric: tabular-nums; }
+  .cfg-input .unit { color: var(--ink-2); font-weight: 600; }
+  .cfg-actions { display: flex; align-items: center; gap: 14px; margin-top: 16px; }
+  .cfg-actions .saved { color: var(--good); font-weight: 700; font-size: 13px; opacity: 0; transition: opacity .2s; }
+  .cfg-actions .saved.show { opacity: 1; }
+  /* Acumulados turno + mensual, lado a lado */
+  .acc-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 1000px){ .acc-row { grid-template-columns: 1fr; } }
+  .acc-card { padding: 14px 18px; }
+  .acc-head { font-size: 13.5px; font-weight: 700; color: var(--ink-1); margin-bottom: 14px; }
+  .acc-head span { font-weight: 600; color: var(--ink-2); font-size: 12px; }
+  .acc-foot { margin-top: 12px; font-size: 12px; color: var(--ink-2); font-weight: 600; }
+  .section-title .eye { margin-left: 8px; background: none; border: 0; cursor: pointer; font-size: 15px; line-height: 1; opacity: .65; padding: 2px 4px; border-radius: 6px; }
+  .section-title .eye:hover { opacity: 1; background: color-mix(in srgb, var(--brand-b) 10%, transparent); }
+  .meas.shift { grid-template-columns: 1fr 1fr .8fr; gap: 14px; }
+  @media (max-width: 620px){ .meas.shift { grid-template-columns: 1fr 1fr; } }
+
+  /* Histórico */
+  .hist-controls { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
+  .hist-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+  .hist-controls input { border: 1px solid var(--axis); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 14px; background: var(--card); color: var(--ink-1); }
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+  .presets button { border: 1px solid var(--border); background: transparent; color: var(--ink-2); padding: 8px 12px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600; }
+  .presets button:hover { background: color-mix(in srgb, var(--brand-b) 12%, transparent); color: var(--ink-1); }
+
+  footer { text-align: center; color: var(--ink-muted); font-size: 11.5px; padding: 16px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <img class="logo" src="/logo.jpeg" alt="Segra Nutrición Animal" />
+    <div>
+      <h1>SCADA SEGRA</h1>
+      <div class="sub">Monitoreo de Planta</div>
+    </div>
+  </div>
+  <div class="hstatus">
+    <div class="clock tnum" id="clock">--:--:--</div>
+    <div class="pill off" id="conn"><span class="led"></span><span id="connTxt">CONECTANDO…</span></div>
+  </div>
+</header>
+
+<nav class="topnav" id="topnav">
+  <button data-view="reportes">📄 Reportes</button>
+  <button data-view="dash" class="active">⚡ Energía</button>
+  <button data-view="almacen">📦 Almacen P1</button>
+  <button data-view="proceso">🏭 Proceso P3</button>
+  <button data-view="config">🔧 Configuración</button>
+</nav>
+
+<div class="subbar" id="subbar">
+  <div class="devinfo">
+    <span class="devstate off" id="devState"><span class="led"></span>—</span>
+    Medidor <b>WEG PFW03-M12</b> · Unit <b id="barUnit">2</b> · <b id="barConn">192.168.0.168:8887</b> · última conexión: <span id="lastupd" class="tnum">—</span>
+    <a class="editlink" id="btnEditDev" title="Editar configuración del dispositivo">⚙ Editar configuración</a>
+  </div>
+  <div class="ranges" id="ranges">
+    <button data-min="5">5 min</button>
+    <button data-min="30" class="active">30 min</button>
+    <button data-min="60">1 h</button>
+    <button data-min="360">6 h</button>
+  </div>
+</div>
+
+<main id="cfgView" hidden>
+  <div class="section-title">Configuración</div>
+  <div class="card cfg">
+    <button class="btn-reset" id="btnBack" style="margin-bottom:16px">← Volver al monitoreo</button>
+    <div class="cfg-block">
+      <h3>Medición de energía</h3>
+      <div class="cfg-row">
+        <label>Valor por kWh
+          <span class="hint">Se multiplica por los kWh medidos para obtener el valor total.</span>
+        </label>
+        <div class="cfg-input">
+          <input type="text" id="cfgCurrency" maxlength="8" style="width:56px" />
+          <input type="number" id="cfgKwhValue" step="0.01" min="0" style="width:140px" />
+          <span class="unit">/ kWh</span>
+        </div>
+      </div>
+      <div class="cfg-actions">
+        <button class="btn btn-start" id="btnSaveCfg" style="background:var(--brand-b)">Guardar</button>
+        <span id="cfgSaved" class="saved"></span>
+      </div>
+    </div>
+
+    <div class="cfg-block" style="margin-top:26px">
+      <h3>Dispositivos</h3>
+      <div style="overflow-x:auto">
+        <table class="devtable">
+          <thead>
+            <tr><th>Dispositivo</th><th>Tipo</th><th>Módulo</th><th>IP</th><th>Puerto</th><th>Unit</th><th>Estado</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>WEG PFW03-M12</b></td>
+              <td>Medidor de energía</td>
+              <td>Energía</td>
+              <td><input class="devinp" id="cfgHost" maxlength="64" style="width:150px" /></td>
+              <td><input class="devinp tnum" id="cfgPort" type="number" min="1" max="65535" style="width:90px" /></td>
+              <td><input class="devinp tnum" id="cfgUnit" type="number" min="0" max="247" style="width:70px" /></td>
+              <td><span class="st good" id="devStateTable"><span class="led"></span>—</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cfg-actions">
+        <button class="btn btn-start" id="btnSaveDev" style="background:var(--brand-b)">Guardar dispositivo</button>
+        <span id="devSaved" class="saved"></span>
+      </div>
+    </div>
+  </div>
+</main>
+
+<main id="almView" hidden>
+  <div class="section-title">Almacen P1</div>
+  <div class="card" style="text-align:center; padding:56px 24px">
+    <div style="font-size:46px">📦</div>
+    <h2 style="margin:14px 0 6px; color:var(--ink-1)">Módulo de Almacén — Planta 1</h2>
+    <p style="color:var(--ink-2); max-width:520px; margin:0 auto">Próximamente: monitoreo de niveles, silos y variables de la planta de almacenamiento.
+    Se integrará aquí de forma nativa, como nuevo módulo del SCADA.</p>
+  </div>
+</main>
+
+<main id="procView" hidden>
+  <div class="section-title">Proceso P3</div>
+  <div class="card" style="text-align:center; padding:56px 24px">
+    <div style="font-size:46px">🏭</div>
+    <h2 style="margin:14px 0 6px; color:var(--ink-1)">Módulo de Proceso — Planta 3</h2>
+    <p style="color:var(--ink-2); max-width:520px; margin:0 auto">Próximamente: monitoreo de variables de PLC y sensores de planta.
+    Se integrará aquí de forma nativa, como nuevo módulo del SCADA.</p>
+  </div>
+</main>
+
+<main id="histView" hidden>
+  <div class="section-title">Reportes — comportamiento por fecha</div>
+  <div class="card">
+    <button class="btn-reset" id="btnBackHist" style="margin-bottom:16px">← Volver al monitoreo</button>
+    <div class="hist-controls">
+      <label>Desde<input type="datetime-local" id="histFrom" step="1"></label>
+      <label>Hasta<input type="datetime-local" id="histTo" step="1"></label>
+      <button class="btn btn-start" id="btnRunHist" style="background:var(--brand-b)">Consultar</button>
+      <button class="btn-reset" id="btnCsv" style="padding:10px 16px">⬇ Guardar CSV</button>
+      <div class="presets">
+        <button data-preset="1h">Última hora</button>
+        <button data-preset="today">Hoy</button>
+        <button data-preset="yesterday">Ayer</button>
+        <button data-preset="shift">Turno actual</button>
+        <button data-preset="7d">7 días</button>
+      </div>
+    </div>
+  </div>
+  <div class="tiles" id="histSummary" style="margin-top:16px">
+    <div class="tile"><div class="label">Energía del periodo</div><div class="val tnum"><span id="histKwh">—</span><small> kWh</small></div></div>
+    <div class="tile"><div class="label">Valor</div><div class="val tnum"><span id="histValor">—</span></div></div>
+    <div class="tile"><div class="label">Potencia media</div><div class="val tnum"><span id="histAvg">—</span><small> kW</small></div></div>
+    <div class="tile"><div class="label">Potencia máx</div><div class="val tnum"><span id="histPmax">—</span><small> kW</small></div></div>
+    <div class="tile"><div class="label">Corriente máx</div><div class="val tnum"><span id="histImax">—</span><small> A</small></div></div>
+    <div class="tile"><div class="label">Muestras</div><div class="val tnum"><span id="histN">—</span></div></div>
+  </div>
+  <div class="prodcost">
+    <div class="pc-cell">
+      <div class="klabel">Kilos producidos en el periodo</div>
+      <div class="pc-inp"><input type="number" id="histKg" min="0" step="any" placeholder="0" /><span>kg</span></div>
+    </div>
+    <div class="pc-arrow">→</div>
+    <div class="pc-cell">
+      <div class="klabel">Precio por kilo (costo energético)</div>
+      <div class="big tnum" style="color:var(--brand-b)"><span id="histPerKg">—</span><small>/kg</small></div>
+    </div>
+  </div>
+  <div class="section-title">Comportamiento en el periodo</div>
+  <div class="charts" id="histCharts"></div>
+</main>
+
+<main id="dashView">
+  <div class="section-title">Variables monitoreadas</div>
+  <div class="charts" id="chartRow"></div>
+
+  <div class="section-title">Parámetros eléctricos</div>
+  <div class="tiles" id="tilesElec"></div>
+
+  <div class="section-title">Acumulados de energía <button class="eye" id="eyeToggle" title="Mostrar precios">👁</button></div>
+  <div class="acc-row">
+    <div class="card acc-card">
+      <div class="acc-head">Por turno <span>· diario 22:00 → 22:00</span></div>
+      <div class="meas shift">
+        <div class="bigcol">
+          <div class="klabel">Energía del turno</div>
+          <div class="big tnum" style="color:var(--series-i)"><span id="shiftKwh">0.000</span><small>kWh</small></div>
+        </div>
+        <div class="bigcol">
+          <div class="klabel">Valor acumulado</div>
+          <div class="big tnum" style="color:var(--series-fp)"><span id="shiftValor">—</span></div>
+        </div>
+        <div class="metric">
+          <div class="mlabel">Potencia media</div>
+          <div class="mv tnum"><span id="shiftAvg">—</span><small> kW</small></div>
+        </div>
+      </div>
+      <div class="acc-foot">Turno: <b id="shiftRange">—</b></div>
+    </div>
+
+    <div class="card acc-card">
+      <div class="acc-head">Mensual <span>· día 1 → fin de mes</span></div>
+      <div class="meas shift">
+        <div class="bigcol">
+          <div class="klabel">Energía del mes</div>
+          <div class="big tnum" style="color:var(--series-p)"><span id="monthKwh">0.000</span><small>kWh</small></div>
+        </div>
+        <div class="bigcol">
+          <div class="klabel">Valor acumulado</div>
+          <div class="big tnum" style="color:var(--series-fp)"><span id="monthValor">—</span></div>
+        </div>
+        <div class="metric">
+          <div class="mlabel">Potencia media</div>
+          <div class="mv tnum"><span id="monthAvg">—</span><small> kW</small></div>
+        </div>
+      </div>
+      <div class="acc-foot">Mes: <b id="monthRange">—</b></div>
+    </div>
+  </div>
+
+  <div class="section-title">Medición manual</div>
+  <div class="card">
+    <div class="meas">
+      <div class="bigcol">
+        <div class="klabel">Energía medida</div>
+        <div class="big tnum"><span id="measKwh">0.000</span><small>kWh</small></div>
+        <div class="sub" id="measState">Sin medición activa</div>
+      </div>
+      <div class="bigcol">
+        <div class="klabel">Costo energía (kWh × <span id="measRate">—</span>)</div>
+        <div class="big tnum" style="color:var(--series-fp)"><span id="measValor">—</span></div>
+      </div>
+      <div class="metric">
+        <div class="mlabel">Potencia media</div>
+        <div class="mv tnum"><span id="measAvg">—</span><small> kW</small></div>
+      </div>
+      <div class="metric">
+        <div class="mlabel">Duración</div>
+        <div class="mv tnum"><span id="measDur">00:00:00</span></div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-start" id="btnStart">▶ Iniciar medición</button>
+        <button class="btn btn-stop" id="btnStop" disabled>■ Detener medición</button>
+        <button class="btn-reset" id="btnReset" style="display:none">Nueva medición</button>
+      </div>
+    </div>
+    <div class="prodcost">
+      <div class="pc-cell">
+        <div class="klabel">Kilos producidos en el lapso</div>
+        <div class="pc-inp"><input type="number" id="measKg" min="0" step="any" placeholder="0" /><span>kg</span></div>
+      </div>
+      <div class="pc-arrow">→</div>
+      <div class="pc-cell">
+        <div class="klabel">Precio por kilo (costo energético)</div>
+        <div class="big tnum" style="color:var(--brand-b)"><span id="measPerKg">—</span><small>/kg</small></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">Energía</div>
+  <div class="note" id="energyNote">
+    <span>⚠️</span>
+    <div><b>Contadores en cero.</b> El PFW03 mide en tiempo real pero aún no integra energía; se poblarán al configurar la integración/relación TC en el equipo. Las columnas ya se registran.</div>
+  </div>
+  <div class="tiles" id="tilesEnergy"></div>
+</main>
+
+<footer id="foot">SCADA SEGRA · v1 — actualización cada 1 s</footer>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt = (v, d) => (v == null || !isFinite(v)) ? "—" : Number(v).toLocaleString("es-CL", { minimumFractionDigits: d, maximumFractionDigits: d });
+
+/* ---------- Gráfica de líneas en canvas (sin dependencias) ---------- */
+class LineChart {
+  constructor(canvas, opts) {
+    this.c = canvas; this.ctx = canvas.getContext("2d");
+    this.colorVar = opts.colorVar; this.unit = opts.unit || ""; this.dec = opts.dec ?? 1;
+    this.scale = opts.scale || ((y) => y); // p.ej. W→kW
+    this.pts = []; this.windowMs = opts.windowMs || 5 * 60000;
+    this.hover = null; this.tip = opts.tip;
+    new ResizeObserver(() => this.render()).observe(canvas.parentElement);
+    canvas.addEventListener("mousemove", (e) => this.onMove(e));
+    canvas.addEventListener("mouseleave", () => { this.hover = null; if (this.tip) this.tip.style.display = "none"; this.render(); });
+  }
+  setData(arr, range) { this.pts = arr.map(p => ({ t: p.t, y: this.scale(p.y) })); this.xRange = range || null; this.render(); }
+  push(t, y) {
+    this.pts.push({ t, y: this.scale(y) });
+    const min = Date.now() - this.windowMs - 2000;
+    while (this.pts.length && this.pts[0].t < min) this.pts.shift();
+    this.render();
+  }
+  onMove(e) {
+    const r = this.c.getBoundingClientRect();
+    this.hover = { x: e.clientX - r.left, y: e.clientY - r.top };
+    this.render();
+  }
+  getStats() { // mín/máx/prom de la ventana visible (en unidades ya escaladas)
+    let t0, t1;
+    if (this.xRange) { t0 = this.xRange.t0; t1 = this.xRange.t1; }
+    else { t1 = Date.now(); t0 = t1 - this.windowMs; }
+    const ys = this.pts.filter(p => p.t >= t0 - 2000 && p.t <= t1 + 2000).map(p => p.y);
+    if (!ys.length) return null;
+    let mn = Infinity, mx = -Infinity, sum = 0;
+    for (const y of ys) { if (y < mn) mn = y; if (y > mx) mx = y; sum += y; }
+    return { min: mn, max: mx, avg: sum / ys.length };
+  }
+  render() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.c.parentElement.clientWidth, h = this.c.parentElement.clientHeight;
+    if (!w || !h) return;
+    this.c.width = w * dpr; this.c.height = h * dpr;
+    const ctx = this.ctx; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    const color = cssVar(this.colorVar), grid = cssVar("--grid"), axis = cssVar("--axis"), muted = cssVar("--ink-muted");
+    const P = { l: 46, r: 10, t: 8, b: 20 };
+    const pw = w - P.l - P.r, ph = h - P.t - P.b;
+    let t0, t1;
+    if (this.xRange) { t0 = this.xRange.t0; t1 = this.xRange.t1; }
+    else { t1 = Date.now(); t0 = t1 - this.windowMs; }
+    const span = t1 - t0;
+    const pts = this.pts.filter(p => p.t >= t0 - 2000 && p.t <= t1 + 2000);
+    // Rango Y
+    let lo = Infinity, hi = -Infinity;
+    for (const p of pts) { if (p.y < lo) lo = p.y; if (p.y > hi) hi = p.y; }
+    if (!isFinite(lo)) { lo = 0; hi = 1; }
+    if (hi - lo < 1e-6) { hi += 1; lo -= 1; }
+    const pad = (hi - lo) * 0.15; lo -= pad; hi += pad;
+    const X = (t) => P.l + ((t - t0) / (t1 - t0)) * pw;
+    const Y = (y) => P.t + (1 - (y - lo) / (hi - lo)) * ph;
+    // Grid + labels Y
+    ctx.font = "11px system-ui, sans-serif"; ctx.textBaseline = "middle";
+    ctx.strokeStyle = grid; ctx.lineWidth = 1; ctx.fillStyle = muted;
+    const ticks = 4;
+    for (let i = 0; i <= ticks; i++) {
+      const yy = lo + (hi - lo) * i / ticks, py = Y(yy);
+      ctx.beginPath(); ctx.moveTo(P.l, py); ctx.lineTo(w - P.r, py); ctx.stroke();
+      ctx.textAlign = "right"; ctx.fillText(fmt(yy, this.dec), P.l - 6, py);
+    }
+    // Ticks X (tiempo)
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    const xt = 4;
+    for (let i = 0; i <= xt; i++) {
+      const tt = t0 + (t1 - t0) * i / xt, px = X(tt);
+      const d = new Date(tt), DD = String(d.getDate()).padStart(2, "0"), MM = String(d.getMonth() + 1).padStart(2, "0");
+      const hh = String(d.getHours()).padStart(2, "0"), mm = String(d.getMinutes()).padStart(2, "0"), ss = String(d.getSeconds()).padStart(2, "0");
+      const lbl = span <= 5 * 60000 ? `${hh}:${mm}:${ss}` : span <= 26 * 3600000 ? `${hh}:${mm}` : `${DD}/${MM} ${hh}:${mm}`;
+      ctx.fillText(lbl, px, h - P.b + 5);
+    }
+    if (pts.length < 2) return;
+    // Área
+    const grad = ctx.createLinearGradient(0, P.t, 0, P.t + ph);
+    grad.addColorStop(0, color + "33"); grad.addColorStop(1, color + "00");
+    ctx.beginPath(); ctx.moveTo(X(pts[0].t), Y(pts[0].y));
+    for (const p of pts) ctx.lineTo(X(p.t), Y(p.y));
+    ctx.lineTo(X(pts[pts.length - 1].t), P.t + ph); ctx.lineTo(X(pts[0].t), P.t + ph); ctx.closePath();
+    ctx.fillStyle = grad; ctx.fill();
+    // Línea
+    ctx.beginPath(); ctx.moveTo(X(pts[0].t), Y(pts[0].y));
+    for (const p of pts) ctx.lineTo(X(p.t), Y(p.y));
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+    // Último punto
+    const last = pts[pts.length - 1];
+    ctx.beginPath(); ctx.arc(X(last.t), Y(last.y), 3.5, 0, 7); ctx.fillStyle = color; ctx.fill();
+    ctx.beginPath(); ctx.arc(X(last.t), Y(last.y), 6, 0, 7); ctx.strokeStyle = color + "55"; ctx.lineWidth = 2; ctx.stroke();
+    // Crosshair + tooltip
+    if (this.hover && this.hover.x >= P.l && this.hover.x <= w - P.r) {
+      let best = null, bd = Infinity;
+      for (const p of pts) { const d = Math.abs(X(p.t) - this.hover.x); if (d < bd) { bd = d; best = p; } }
+      if (best) {
+        const bx = X(best.t), by = Y(best.y);
+        ctx.strokeStyle = axis; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+        ctx.beginPath(); ctx.moveTo(bx, P.t); ctx.lineTo(bx, P.t + ph); ctx.stroke(); ctx.setLineDash([]);
+        ctx.beginPath(); ctx.arc(bx, by, 4, 0, 7); ctx.fillStyle = color; ctx.fill();
+        ctx.beginPath(); ctx.arc(bx, by, 6.5, 0, 7); ctx.strokeStyle = cssVar("--card"); ctx.lineWidth = 2; ctx.stroke();
+        if (this.tip) {
+          const d = new Date(best.t);
+          this.tip.style.display = "block";
+          this.tip.innerHTML = `<div class="t tnum">${d.toLocaleTimeString("es-CL")}</div><div class="tnum"><b>${fmt(best.y, this.dec)}</b> ${this.unit}</div>`;
+          const tw = this.tip.offsetWidth;
+          let lx = bx + 10; if (lx + tw > w) lx = bx - tw - 10;
+          this.tip.style.left = lx + "px"; this.tip.style.top = Math.max(0, by - 34) + "px";
+        }
+      }
+    }
+  }
+}
+
+/* ---------- Definición de la pantalla ---------- */
+const CHARTS = [
+  { key: "i", name: "Corriente", unit: "A", dec: 1, colorVar: "--series-i", scale: (y) => y },
+  { key: "p", name: "Potencia activa", unit: "kW", dec: 2, colorVar: "--series-p", scale: (y) => y / 1000 },
+  { key: "fp", name: "Factor de potencia", unit: "", dec: 3, colorVar: "--series-fp", scale: (y) => y },
+];
+const charts = {};
+const chartRow = $("#chartRow");
+for (const c of CHARTS) {
+  const card = document.createElement("div"); card.className = "card chart-card";
+  card.innerHTML = `<div class="top"><div class="name"><span class="swatch" style="background:var(${c.colorVar})"></span>${c.name}</div>
+    <div class="now tnum"><span id="now-${c.key}">—</span><small>${c.unit}</small></div></div>
+    <div class="chart-wrap"><canvas></canvas><div class="tooltip"></div></div>
+    <div class="chart-stats">
+      <span>Mín <b class="tnum" id="min-${c.key}">—</b></span>
+      <span>Prom <b class="tnum" id="avg-${c.key}">—</b></span>
+      <span>Máx <b class="tnum" id="max-${c.key}">—</b></span>
+    </div>`;
+  chartRow.appendChild(card);
+  charts[c.key] = new LineChart(card.querySelector("canvas"),
+    { colorVar: c.colorVar, unit: c.unit, dec: c.dec, scale: c.scale, tip: card.querySelector(".tooltip"), windowMs: 5 * 60000 });
+}
+function updateChartStats() { // resumen mín/prom/máx del rango seleccionado
+  for (const c of CHARTS) {
+    const st = charts[c.key].getStats();
+    const u = c.unit ? " " + c.unit : "";
+    $("#min-" + c.key).textContent = st ? fmt(st.min, c.dec) + u : "—";
+    $("#avg-" + c.key).textContent = st ? fmt(st.avg, c.dec) + u : "—";
+    $("#max-" + c.key).textContent = st ? fmt(st.max, c.dec) + u : "—";
+  }
+}
+
+/* Tiles: parámetros eléctricos. status(v) → {cls,label} o null */
+const ELEC = [
+  { key: "v", label: "Tensión", unit: "V", dec: 1, status: (v) => v >= 205 && v <= 245 ? ["good","Normal"] : ["warn","Fuera de rango"] },
+  { key: "s", label: "Pot. aparente", unit: "kVA", dec: 2, scale: (v) => v / 1000 },
+  { key: "q", label: "Pot. reactiva", unit: "kVAr", dec: 2, scale: (v) => v / 1000 },
+  { key: "cosphi", label: "Cosφ", unit: "", dec: 3 },
+  { key: "freq", label: "Frecuencia", unit: "Hz", dec: 2, status: (v) => v >= 49.5 && v <= 50.5 ? ["good","Estable"] : ["warn","Desviada"] },
+  { key: "thdv", label: "THD Tensión", unit: "%", dec: 2, status: (v) => v < 5 ? ["good","Bajo"] : v < 8 ? ["warn","Elevado"] : ["serious","Alto"] },
+  { key: "thdi", label: "THD Corriente", unit: "%", dec: 2, status: (v) => v < 8 ? ["good","Bajo"] : v < 15 ? ["warn","Elevado"] : ["serious","Alto"] },
+];
+const ENERGY = [
+  { key: "kwh", label: "Energía activa", unit: "kWh", dec: 3 },
+  { key: "kwh_e", label: "Energía activa E.", unit: "kWh", dec: 3 },
+  { key: "kvarh_i", label: "Reactiva ind.", unit: "kVArh", dec: 3 },
+  { key: "kvarh_c", label: "Reactiva cap.", unit: "kVArh", dec: 3 },
+  { key: "inicio_dia", label: "Inicio del día", unit: "h", dec: 0 },
+  { key: "inicio_mes", label: "Inicio del mes", unit: "día", dec: 0 },
+];
+function buildTiles(container, defs) {
+  const map = {};
+  for (const d of defs) {
+    const el = document.createElement("div"); el.className = "tile";
+    el.innerHTML = `<div class="label">${d.label}</div>
+      <div class="val tnum"><span id="tv-${d.key}">—</span><small>${d.unit}</small></div>
+      <div id="ts-${d.key}"></div>`;
+    container.appendChild(el); map[d.key] = d;
+  }
+  return map;
+}
+const elecMap = buildTiles($("#tilesElec"), ELEC);
+const enerMap = buildTiles($("#tilesEnergy"), ENERGY);
+function updateTile(d, raw) {
+  const v = raw == null ? null : (d.scale ? d.scale(raw) : raw);
+  $("#tv-" + d.key).textContent = fmt(v, d.dec);
+  const st = $("#ts-" + d.key);
+  if (d.status && v != null && isFinite(v)) {
+    const [cls, label] = d.status(v);
+    st.className = "st " + cls; st.innerHTML = `<span class="led"></span>${label}`;
+  } else { st.className = ""; st.innerHTML = ""; }
+}
+
+/* FP status en la tarjeta de gráfica (semáforo bajo el valor) */
+function fpBadge(v) {
+  const el = $("#now-fp"); if (v == null) return;
+  el.style.color = v >= 0.95 ? "var(--good)" : v >= 0.90 ? "var(--warn)" : "var(--critical)";
+}
+
+/* ---------- Privacidad de precios acumulados (ojo) ---------- */
+let showValues = false; // por defecto ocultos
+function setValor(id, text) {
+  const el = $("#" + id); el.dataset.real = text;
+  el.textContent = (!showValues && text !== "—") ? "••••" : text;
+}
+function updateEye() {
+  const b = $("#eyeToggle");
+  b.textContent = showValues ? "🙈" : "👁";
+  b.title = showValues ? "Ocultar precios" : "Mostrar precios";
+}
+$("#eyeToggle").addEventListener("click", () => {
+  showValues = !showValues; updateEye();
+  for (const id of ["shiftValor", "monthValor"]) {
+    const el = $("#" + id), real = el.dataset.real || "—";
+    el.textContent = (!showValues && real !== "—") ? "••••" : real;
+  }
+});
+updateEye();
+
+/* ---------- Medición por turno (continua, 22:00 → 22:00) ---------- */
+const SHIFT_START_HOUR = 22;
+function shiftWindow(now = Date.now()) {
+  const d = new Date(now);
+  const start = new Date(d); start.setHours(SHIFT_START_HOUR, 0, 0, 0);
+  if (d.getHours() < SHIFT_START_HOUR) start.setDate(start.getDate() - 1); // aún en el turno que empezó ayer
+  const end = new Date(start); end.setDate(end.getDate() + 1);
+  return { start: start.getTime(), end: end.getTime() };
+}
+function fmtDM(ms) {
+  const d = new Date(ms);
+  return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:00`;
+}
+async function refreshShift() {
+  const now = Date.now(), { start, end } = shiftWindow(now);
+  $("#shiftRange").textContent = `${fmtDM(start)} → ${fmtDM(end)}`;
+  try {
+    const e = await fetch(`/api/energy?from=${start}&to=${now}`).then(x => x.json());
+    $("#shiftKwh").textContent = fmt(e.kwh, 3);
+    $("#shiftAvg").textContent = e.samples > 1 ? fmt(e.avgKw, 2) : "—";
+    setValor("shiftValor", cfg.kwhValue > 0 ? `${cfg.currency}${fmt(e.kwh * cfg.kwhValue, 0)}` : "—");
+  } catch (_) {}
+}
+
+/* ---------- Medición mensual (continua, día 1 → fin de mes) ---------- */
+function monthWindow(now = Date.now()) {
+  const d = new Date(now);
+  const start = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+  const end = new Date(d.getFullYear(), d.getMonth() + 1, 1, 0, 0, 0, 0);
+  return { start: start.getTime(), end: end.getTime() };
+}
+function fmtDia(ms) { const d = new Date(ms); return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`; }
+function fmtDurDias(ms) {
+  if (ms < 0) ms = 0; const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = String(Math.floor(s % 86400 / 3600)).padStart(2, "0");
+  const m = String(Math.floor(s % 3600 / 60)).padStart(2, "0");
+  return `${d}d ${h}:${m}`;
+}
+async function refreshMonth() {
+  const now = Date.now(), { start, end } = monthWindow(now);
+  $("#monthRange").textContent = `${fmtDia(start)} → ${fmtDia(end - 86400000)}`;
+  try {
+    const e = await fetch(`/api/energy?from=${start}&to=${now}`).then(x => x.json());
+    $("#monthKwh").textContent = fmt(e.kwh, 3);
+    $("#monthAvg").textContent = e.samples > 1 ? fmt(e.avgKw, 2) : "—";
+    setValor("monthValor", cfg.kwhValue > 0 ? `${cfg.currency}${fmt(e.kwh * cfg.kwhValue, 0)}` : "—");
+  } catch (_) {}
+}
+
+/* ---------- Histórico (pantalla de datos anteriores) ---------- */
+function toLocalInput(ms) {
+  const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+const histCharts = {};
+for (const c of CHARTS) {
+  const card = document.createElement("div"); card.className = "card chart-card";
+  card.innerHTML = `<div class="top"><div class="name"><span class="swatch" style="background:var(${c.colorVar})"></span>${c.name}</div></div>
+    <div class="chart-wrap" style="height:240px"><canvas></canvas><div class="tooltip"></div></div>`;
+  document.getElementById("histCharts").appendChild(card);
+  histCharts[c.key] = new LineChart(card.querySelector("canvas"),
+    { colorVar: c.colorVar, unit: c.unit, dec: c.dec, scale: c.scale, tip: card.querySelector(".tooltip") });
+}
+async function runHist() {
+  const from = new Date($("#histFrom").value).getTime();
+  const to = new Date($("#histTo").value).getTime();
+  if (!(from < to)) { alert("Revisa el rango: 'Desde' debe ser anterior a 'Hasta'."); return; }
+  let r = { points: [] };
+  try { r = await fetch(`/api/history?from=${from}&to=${to}`).then(x => x.json()); } catch (_) {}
+  const range = { t0: from, t1: to };
+  for (const c of CHARTS) histCharts[c.key].setData(r.points.map(p => ({ t: p.t, y: p[c.key] })), range);
+  let e = { kwh: 0, avgKw: 0, samples: 0 };
+  try { e = await fetch(`/api/energy?from=${from}&to=${to}`).then(x => x.json()); } catch (_) {}
+  let pmax = -Infinity, imax = -Infinity;
+  for (const p of r.points) { if (p.p > pmax) pmax = p.p; if (p.i > imax) imax = p.i; }
+  $("#histKwh").textContent = fmt(e.kwh, 3);
+  $("#histValor").textContent = cfg.kwhValue > 0 ? `${cfg.currency}${fmt(e.kwh * cfg.kwhValue, 0)}` : "—";
+  $("#histAvg").textContent = e.samples > 1 ? fmt(e.avgKw, 2) : "—";
+  $("#histPmax").textContent = isFinite(pmax) ? fmt(pmax / 1000, 2) : "—";
+  $("#histImax").textContent = isFinite(imax) ? fmt(imax, 1) : "—";
+  $("#histN").textContent = e.samples || r.points.length;
+  lastHistKwh = e.kwh; updateHistPerKg();
+}
+let lastHistKwh = 0;
+function updateHistPerKg() { // precio por kilo del periodo consultado
+  const kg = parseFloat($("#histKg").value);
+  const val = lastHistKwh * (cfg.kwhValue || 0);
+  const perKg = (kg > 0 && val > 0) ? val / kg : null;
+  $("#histPerKg").textContent = perKg != null ? `${cfg.currency}${fmt(perKg, perKg < 100 ? 2 : 0)}` : "—";
+}
+$("#histKg").addEventListener("input", updateHistPerKg);
+$("#btnRunHist").addEventListener("click", runHist);
+$("#btnCsv").addEventListener("click", () => {
+  const from = new Date($("#histFrom").value).getTime();
+  const to = new Date($("#histTo").value).getTime();
+  if (!(from < to)) { alert("Revisa el rango antes de exportar."); return; }
+  const a = document.createElement("a");
+  a.href = `/api/export?from=${from}&to=${to}`;
+  a.download = ""; document.body.appendChild(a); a.click(); a.remove();
+});
+document.querySelector(".presets").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-preset]"); if (!b) return;
+  const now = Date.now(); let from, to = now;
+  const startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  switch (b.dataset.preset) {
+    case "1h": from = now - 3600000; break;
+    case "today": from = startOfDay(now); break;
+    case "yesterday": from = startOfDay(now) - 86400000; to = startOfDay(now); break;
+    case "shift": from = shiftWindow().start; break;
+    case "7d": from = now - 7 * 86400000; break;
+  }
+  $("#histFrom").value = toLocalInput(from); $("#histTo").value = toLocalInput(to); runHist();
+});
+
+/* ---------- Navegación entre módulos (menú superior) ---------- */
+const VIEWS = { dash: "#dashView", reportes: "#histView", almacen: "#almView", proceso: "#procView", config: "#cfgView" };
+function showView(v) {
+  if (!VIEWS[v]) v = "dash";
+  for (const k in VIEWS) $(VIEWS[k]).hidden = (k !== v);
+  document.querySelectorAll("#topnav button").forEach(b => b.classList.toggle("active", b.dataset.view === v));
+  $("#subbar").style.display = (v === "dash") ? "" : "none"; // barra de medidor/rangos solo en tiempo real
+  window.scrollTo(0, 0);
+  location.hash = (v === "dash") ? "" : "#" + v;
+  if (v === "config") {
+    loadConfig().then(() => {
+      $("#cfgCurrency").value = cfg.currency; $("#cfgKwhValue").value = cfg.kwhValue;
+      $("#cfgHost").value = cfg.host || ""; $("#cfgPort").value = cfg.port || ""; $("#cfgUnit").value = cfg.unit ?? "";
+    });
+  }
+  if (v === "reportes") {
+    if (!$("#histFrom").value) { const now = Date.now(); $("#histFrom").value = toLocalInput(now - 3600000); $("#histTo").value = toLocalInput(now); }
+    setTimeout(runHist, 60);
+  }
+}
+$("#topnav").addEventListener("click", (e) => { const b = e.target.closest("[data-view]"); if (b) showView(b.dataset.view); });
+$("#btnEditDev").addEventListener("click", () => showView("config"));   // editar config desde la barra del medidor
+$("#btnBack").addEventListener("click", () => showView("dash"));
+$("#btnBackHist").addEventListener("click", () => showView("dash"));
+{ const h = location.hash.replace("#", ""); if (h) showView(h); }        // deep-link (#reportes, #proceso, #config)
+
+/* ---------- Conexión y ciclo ---------- */
+let windowMin = 5;
+let lastTs = 0, failCount = 0;
+
+function setConn(state, txt) {
+  const el = $("#conn"); el.className = "pill " + state; $("#connTxt").textContent = txt;
+}
+function setDevState(active) {
+  const el = $("#devState");
+  el.className = "devstate " + (active ? "on" : "off");
+  el.innerHTML = `<span class="led"></span>${active ? "Activo" : "Inactivo"}`;
+  const t = $("#devStateTable");
+  if (t) { t.className = "st " + (active ? "good" : "critical"); t.innerHTML = `<span class="led"></span>${active ? "Activo" : "Inactivo"}`; }
+}
+function tickClock() { $("#clock").textContent = new Date().toLocaleTimeString("es-CL"); }
+setInterval(tickClock, 1000); tickClock();
+
+async function loadHistory(min) {
+  windowMin = min;
+  for (const k in charts) charts[k].windowMs = min * 60000;
+  try {
+    const r = await fetch(`/api/history?minutes=${min}`).then(x => x.json());
+    for (const c of CHARTS) charts[c.key].setData(r.points.map(p => ({ t: p.t, y: p[c.key] })));
+    updateChartStats();
+  } catch (e) { /* se rellenará con /latest */ }
+}
+
+async function poll() {
+  try {
+    const r = await fetch("/api/latest").then(x => x.json());
+    if (!r.ok || !r.row) { setConn("off", "SIN DATOS"); setDevState(false); return; }
+    const row = r.row; failCount = 0;
+    // Actualiza gráficas (solo si es una lectura nueva)
+    if (row.ts_unix_ms !== lastTs) {
+      lastTs = row.ts_unix_ms;
+      for (const c of CHARTS) if (row[c.key] != null) charts[c.key].push(row.ts_unix_ms, row[c.key]);
+    }
+    // Valores "ahora" de las gráficas
+    $("#now-i").textContent = fmt(row.i, 1);
+    $("#now-p").textContent = fmt(row.p / 1000, 2);
+    $("#now-fp").textContent = fmt(row.fp, 3); fpBadge(row.fp);
+    // Tiles
+    for (const d of ELEC) updateTile(d, row[d.key]);
+    for (const d of ENERGY) updateTile(d, row[d.key]);
+    // Nota de energía: ocultar si ya hay consumo
+    if ((row.kwh || 0) > 0) $("#energyNote").style.display = "none";
+    // Estado de conexión
+    $("#lastupd").textContent = new Date(row.ts_unix_ms).toLocaleTimeString("es-CL");
+    if (r.stale) { setConn("stale", "DATOS ANTIGUOS"); setDevState(false); }
+    else { setConn("on", "EN LÍNEA"); setDevState(true); }
+    if (sess && sess.active) refreshEnergy();
+    refreshShift();
+    refreshMonth();
+    updateChartStats();
+  } catch (e) {
+    if (++failCount >= 2) { setConn("off", "SIN CONEXIÓN"); setDevState(false); }
+  }
+}
+
+/* ---------- Configuración (valor por kWh, server-side) ---------- */
+let cfg = { kwhValue: 0, currency: "$" };
+let lastKwh = 0;
+function updateValue() {
+  $("#measRate").textContent = `${cfg.currency}${fmt(cfg.kwhValue, 0)}/kWh`;
+  const val = lastKwh * (cfg.kwhValue || 0);
+  $("#measValor").textContent = (cfg.kwhValue > 0) ? `${cfg.currency}${fmt(val, 0)}` : "—";
+  // Precio por kilo = costo energético del lapso / kilos producidos
+  const kg = parseFloat($("#measKg").value);
+  const perKg = (kg > 0 && val > 0) ? val / kg : null;
+  $("#measPerKg").textContent = perKg != null ? `${cfg.currency}${fmt(perKg, perKg < 100 ? 2 : 0)}` : "—";
+}
+async function loadConfig() {
+  try { cfg = await fetch("/api/config").then(x => x.json()); } catch (_) {}
+  updateValue(); updateDevBar();
+}
+function updateDevBar() {
+  if (cfg.host) $("#barConn").textContent = `${cfg.host}:${cfg.port}`;
+  if (cfg.unit != null) $("#barUnit").textContent = cfg.unit;
+}
+// Guardar configuración (la navegación la maneja showView)
+$("#btnSaveCfg").addEventListener("click", async () => {
+  const patch = { currency: $("#cfgCurrency").value || "$", kwhValue: parseFloat($("#cfgKwhValue").value) || 0 };
+  try {
+    cfg = await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then(x => x.json());
+    updateValue();
+    const s = $("#cfgSaved"); s.textContent = "✓ Guardado"; s.classList.add("show");
+    setTimeout(() => s.classList.remove("show"), 2000);
+  } catch (_) {}
+});
+$("#btnSaveDev").addEventListener("click", async () => {
+  const patch = { host: $("#cfgHost").value.trim(), port: parseInt($("#cfgPort").value, 10), unit: parseInt($("#cfgUnit").value, 10) };
+  try {
+    cfg = await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then(x => x.json());
+    updateDevBar();
+    const s = $("#devSaved"); s.textContent = "✓ Guardado — el logger lo aplica en ~1 s"; s.classList.add("show");
+    setTimeout(() => s.classList.remove("show"), 3000);
+  } catch (_) {}
+});
+
+/* ---------- Medición de energía (integración server-side) ---------- */
+const SKEY = "scadaEnergySession";
+let sess = null;
+try { sess = JSON.parse(localStorage.getItem(SKEY) || "null"); } catch (_) {}
+
+function saveSess() { localStorage.setItem(SKEY, JSON.stringify(sess)); }
+function fmtDur(ms) {
+  if (ms < 0) ms = 0; const s = Math.floor(ms / 1000);
+  const h = String(Math.floor(s / 3600)).padStart(2, "0");
+  const m = String(Math.floor(s % 3600 / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return `${h}:${m}:${ss}`;
+}
+function renderSessButtons() {
+  const active = sess && sess.active;
+  const done = sess && !sess.active && sess.endMs;
+  $("#btnStart").disabled = !!active;
+  $("#btnStop").disabled = !active;
+  $("#btnReset").style.display = done ? "block" : "none";
+  $("#measState").innerHTML = active
+    ? `<span class="rec"><span class="led"></span>MIDIENDO</span> desde ${new Date(sess.startMs).toLocaleTimeString("es-CL")}`
+    : done ? `Medición finalizada a las ${new Date(sess.endMs).toLocaleTimeString("es-CL")}`
+    : "Sin medición activa";
+}
+async function refreshEnergy() {
+  if (!sess) { lastKwh = 0; $("#measKwh").textContent = "0.000"; $("#measDur").textContent = "00:00:00"; $("#measAvg").textContent = "—"; updateValue(); return; }
+  const to = sess.active ? Date.now() : sess.endMs;
+  try {
+    const e = await fetch(`/api/energy?from=${sess.startMs}&to=${to}`).then(x => x.json());
+    lastKwh = e.kwh;
+    $("#measKwh").textContent = fmt(e.kwh, 3);
+    $("#measDur").textContent = fmtDur((sess.active ? Date.now() : sess.endMs) - sess.startMs);
+    $("#measAvg").textContent = e.samples > 1 ? fmt(e.avgKw, 2) : "—";
+    updateValue();
+  } catch (_) {}
+}
+$("#btnStart").addEventListener("click", () => {
+  sess = { active: true, startMs: lastTs || Date.now(), endMs: null, kg: 0 };
+  $("#measKg").value = "";                       // nueva medición → reinicia kilos
+  saveSess(); renderSessButtons(); refreshEnergy();
+});
+$("#btnStop").addEventListener("click", () => {
+  if (!sess) return; sess.active = false; sess.endMs = lastTs || Date.now();
+  saveSess(); renderSessButtons(); refreshEnergy();
+});
+$("#btnReset").addEventListener("click", () => {
+  sess = null; localStorage.removeItem(SKEY); $("#measKg").value = ""; renderSessButtons(); refreshEnergy();
+});
+// Kilos producidos: recalcula $/kg y persiste con la medición
+$("#measKg").addEventListener("input", () => {
+  if (sess) { sess.kg = parseFloat($("#measKg").value) || 0; saveSess(); }
+  updateValue();
+});
+if (sess && sess.kg) $("#measKg").value = sess.kg;  // restaura kilos al recargar
+renderSessButtons(); refreshEnergy();
+
+$("#ranges").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  document.querySelectorAll("#ranges button").forEach(x => x.classList.remove("active"));
+  b.classList.add("active"); loadHistory(parseInt(b.dataset.min, 10));
+});
+
+loadConfig();
+setInterval(loadConfig, 5000); // refresca el valor en línea para todas las pantallas
+loadHistory(30);
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>
