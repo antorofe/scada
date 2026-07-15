@@ -265,6 +265,7 @@
   <button data-view="dash" class="active">⚡ Energía</button>
   <button data-view="almacen">📦 Almacen P1</button>
   <button data-view="proceso">🏭 Proceso P3</button>
+  <button data-view="mysql">🗄 MySQL</button>
   <button data-view="config">🔧 Configuración</button>
 </nav>
 
@@ -340,6 +341,37 @@
     <h2 style="margin:14px 0 6px; color:var(--ink-1)">Módulo de Almacén — Planta 1</h2>
     <p style="color:var(--ink-2); max-width:520px; margin:0 auto">Próximamente: monitoreo de niveles, silos y variables de la planta de almacenamiento.
     Se integrará aquí de forma nativa, como nuevo módulo del SCADA.</p>
+  </div>
+</main>
+
+<main id="mysqlView" hidden>
+  <div class="section-title">MySQL — Base de datos de producción</div>
+  <div class="card">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px">
+      <div>
+        <h2 style="margin:0 0 4px; color:var(--ink-1); font-size:18px">Prueba de conexión</h2>
+        <p style="margin:0; color:var(--ink-2); font-size:13px">Verifica el acceso al servidor de producción MariaDB (<code>segra</code> / <code>segra_fabrica</code>, solo lectura).</p>
+      </div>
+      <span class="devstate off" id="myState"><span class="led"></span>Sin probar</span>
+    </div>
+
+    <div class="cfg-actions" style="margin-top:16px; display:flex; align-items:center; gap:12px">
+      <button class="btn btn-start" id="btnMyTest" style="background:var(--brand-b)">Probar conexión</button>
+      <span id="myMsg" class="saved"></span>
+    </div>
+
+    <div id="myDetails" hidden style="margin-top:20px; overflow-x:auto">
+      <table class="devtable">
+        <tbody>
+          <tr><th style="text-align:left; white-space:nowrap">Servidor</th><td id="myHost" class="tnum">—</td></tr>
+          <tr><th style="text-align:left; white-space:nowrap">Usuario</th><td id="myUser">—</td></tr>
+          <tr><th style="text-align:left; white-space:nowrap">Versión</th><td id="myVer">—</td></tr>
+          <tr><th style="text-align:left; white-space:nowrap">Hora del servidor</th><td id="myNow" class="tnum">—</td></tr>
+          <tr><th style="text-align:left; white-space:nowrap">Latencia</th><td id="myMs" class="tnum">—</td></tr>
+          <tr><th style="text-align:left; white-space:nowrap">Última muestra</th><td id="mySample" class="tnum">—</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </main>
 
@@ -879,7 +911,7 @@ document.querySelector(".presets").addEventListener("click", (e) => {
 });
 
 /* ---------- Navegación entre módulos (menú superior) ---------- */
-const VIEWS = { dash: "#dashView", reportes: "#histView", almacen: "#almView", proceso: "#procView", config: "#cfgView" };
+const VIEWS = { dash: "#dashView", reportes: "#histView", almacen: "#almView", proceso: "#procView", mysql: "#mysqlView", config: "#cfgView" };
 function showView(v) {
   if (!VIEWS[v]) v = "dash";
   for (const k in VIEWS) $(VIEWS[k]).hidden = (k !== v);
@@ -897,6 +929,7 @@ function showView(v) {
     if (!$("#histFrom").value) { const now = Date.now(); $("#histFrom").value = toLocalInput(now - 3600000); $("#histTo").value = toLocalInput(now); }
     setTimeout(runHist, 60);
   }
+  if (v === "mysql") probarMysql();   // prueba la conexión a la BD de producción al entrar
 }
 $("#topnav").addEventListener("click", (e) => { const b = e.target.closest("[data-view]"); if (b) showView(b.dataset.view); });
 $("#btnEditDev").addEventListener("click", () => showView("config"));   // editar config desde la barra del medidor
@@ -1001,6 +1034,40 @@ $("#btnSaveDev").addEventListener("click", async () => {
     setTimeout(() => s.classList.remove("show"), 3000);
   } catch (_) {}
 });
+
+/* ---------- MySQL: prueba de conexión a la BD de producción ---------- */
+async function probarMysql() {
+  const st = $("#myState"), btn = $("#btnMyTest"), msg = $("#myMsg"), det = $("#myDetails");
+  btn.disabled = true;
+  st.className = "devstate"; st.innerHTML = '<span class="led"></span>Probando…';
+  msg.classList.remove("show"); msg.textContent = "";
+  try {
+    const r = await fetch("/api/fabrica/ping").then(x => x.json());
+    if (r.ok) {
+      st.className = "devstate on"; st.innerHTML = '<span class="led"></span>Conectado';
+      $("#myHost").textContent = (r.host || "—") + ":" + (r.port || 3306);
+      $("#myUser").textContent = (r.server && r.server.usuario) || "—";
+      $("#myVer").textContent = (r.server && r.server.version) || "—";
+      $("#myNow").textContent = (r.server && r.server.ahora) || "—";
+      $("#myMs").textContent = (r.ms != null ? r.ms : "—") + " ms";
+      const s = r.ultimaMuestra;
+      $("#mySample").textContent = s ? `${s.fechahora} · ${s.tipo}/${s.subtipo} = ${s.valor}` : "—";
+      det.hidden = false;
+      msg.style.color = "var(--good)"; msg.textContent = "✓ Conexión correcta"; msg.classList.add("show");
+    } else {
+      st.className = "devstate off"; st.innerHTML = '<span class="led"></span>Sin conexión';
+      det.hidden = true;
+      msg.style.color = "var(--critical)"; msg.textContent = "✗ " + (r.error || "Error desconocido"); msg.classList.add("show");
+    }
+  } catch (e) {
+    st.className = "devstate off"; st.innerHTML = '<span class="led"></span>Sin conexión';
+    det.hidden = true;
+    msg.style.color = "var(--critical)"; msg.textContent = "✗ " + e.message; msg.classList.add("show");
+  } finally {
+    btn.disabled = false;
+  }
+}
+$("#btnMyTest").addEventListener("click", probarMysql);
 
 /* ---------- Medición de energía (integración server-side) ---------- */
 const SKEY = "scadaEnergySession";

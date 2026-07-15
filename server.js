@@ -206,16 +206,17 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/fabrica/ping') {
       (async () => {
         const t0 = Date.now();
-        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        const dbcfg = fabricaDb.loadDbConfig();
+        const cli = new fabricaDb.MySQLClient(dbcfg);
         try {
           await cli.connect();
           const server = (await cli.query('SELECT VERSION() AS version, NOW() AS ahora, CURRENT_USER() AS usuario')).rows[0] || null;
           const ultimaMuestra = (await cli.query(
             'SELECT fechahora, tipo, subtipo, valor FROM segra_fabrica.data_pelleteras ORDER BY id DESC LIMIT 1'
           )).rows[0] || null;
-          json(res, 200, { ok: true, ms: Date.now() - t0, server, ultimaMuestra });
+          json(res, 200, { ok: true, ms: Date.now() - t0, host: dbcfg.host, port: dbcfg.port || 3306, server, ultimaMuestra });
         } catch (e) {
-          json(res, 200, { ok: false, ms: Date.now() - t0, error: e.message });
+          json(res, 200, { ok: false, ms: Date.now() - t0, host: dbcfg.host, port: dbcfg.port || 3306, error: e.message });
         } finally { cli.close(); }
       })();
       return;
