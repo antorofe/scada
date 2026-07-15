@@ -9,3 +9,6 @@ pfw03.db-wal
 
 # Node
 node_modules/
+
+# Config local de Claude Code
+.claude/
