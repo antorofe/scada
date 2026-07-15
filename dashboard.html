@@ -395,10 +395,10 @@
     <div style="overflow-x:auto">
       <table class="prodtable" id="prodTable">
         <thead>
-          <tr><th>Lote</th><th>Producto</th><th>Cliente</th><th>Tipo</th><th>Formato</th><th>kg</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Batches</th><th>Energía</th><th>Costo</th><th>Estado</th></tr>
+          <tr><th>Lote</th><th>Producto</th><th>Cliente</th><th>Tipo</th><th>Formato</th><th>kg</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Batches</th><th>Energía</th><th>Costo</th><th>$/kg</th><th>Estado</th></tr>
         </thead>
         <tbody id="prodTbody">
-          <tr><td colspan="13" style="text-align:center; color:var(--ink-2); padding:20px">Cargando…</td></tr>
+          <tr><td colspan="14" style="text-align:center; color:var(--ink-2); padding:20px">Cargando…</td></tr>
         </tbody>
       </table>
     </div>
@@ -1127,7 +1127,7 @@ async function cargarProducciones() {
     renderProdActual(r.actual);
     renderProdLista(r.lista || [], r.actual);
   } catch (e) {
-    $("#prodTbody").innerHTML = `<tr><td colspan="13" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
+    $("#prodTbody").innerHTML = `<tr><td colspan="14" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
   }
 }
 
@@ -1163,6 +1163,13 @@ function costoEnergia(kwh) {
   if (kwh == null || !(cfg.kwhValue > 0)) return "—";
   return `${cfg.currency}${fmt(kwh * cfg.kwhValue, 0)}`;
 }
+// Costo energético por kilo ($/kg) = (kWh × $/kWh) / kg. Solo tiene sentido con la
+// producción terminada (energía y kilos finales); en curso se muestra "—".
+function costoPorKg(kwh, kg, terminada) {
+  if (!terminada || kwh == null || !(kg > 0) || !(cfg.kwhValue > 0)) return "—";
+  const perKg = (kwh * cfg.kwhValue) / kg;
+  return `${cfg.currency}${fmt(perKg, perKg < 100 ? 2 : 0)}`;
+}
 // Línea de meta del lote: cliente · tipo · formato · kg · cód producto.
 function prodMetaLinea(o) {
   const kg = numOrDash(o.kg);
@@ -1172,7 +1179,7 @@ function prodMetaLinea(o) {
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 
 function renderProdLista(lista, actual) {
-  if (!lista.length) { $("#prodTbody").innerHTML = `<tr><td colspan="13" style="text-align:center; color:var(--ink-2); padding:20px">Sin producciones.</td></tr>`; return; }
+  if (!lista.length) { $("#prodTbody").innerHTML = `<tr><td colspan="14" style="text-align:center; color:var(--ink-2); padding:20px">Sin producciones.</td></tr>`; return; }
   const enCursoLote = (actual && String(actual.en_marcha) === "1") ? String(actual.lote) : null;
   $("#prodTbody").innerHTML = lista.map(r => {
     const enCurso = String(r.lote) === enCursoLote;
@@ -1198,6 +1205,7 @@ function renderProdLista(lista, actual) {
       <td class="tnum">${batches}</td>
       <td class="tnum">${kwh != null ? fmt(kwh, 2) + " kWh" : "—"}</td>
       <td class="tnum">${costoEnergia(kwh)}</td>
+      <td class="tnum">${costoPorKg(kwh, kg, !enCurso)}</td>
       <td>${estado}</td>
     </tr>`;
   }).join("");
