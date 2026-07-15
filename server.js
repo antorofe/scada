@@ -478,7 +478,7 @@ const server = http.createServer((req, res) => {
           await cli.connect();
           const serverNow = (await cli.query('SELECT NOW() AS now')).rows[0].now;
           const kgBatch = (await cli.query(
-            `SELECT kg_batch FROM segra.programacion WHERE lote=${lote} LIMIT 1`
+            `SELECT kg_batch, tipo FROM segra.programacion WHERE lote=${lote} LIMIT 1`
           )).rows[0];
           const inicio = (await cli.query(
             `SELECT UNIX_TIMESTAMP(MIN(fecha))*1000 AS inicio_ms FROM segra_fabrica.data_ciclado
@@ -498,11 +498,54 @@ const server = http.createServer((req, res) => {
           json(res, 200, {
             ok: true, lote, serverNow,
             kg_batch: kgBatch ? kgBatch.kg_batch : null,
+            tipo: kgBatch ? kgBatch.tipo : null,
             inicio_ms: inicio ? inicio.inicio_ms : null,
             en_marcha: enMarcha,
             batches,
             segmentos: segmentosProduccion(iniEvs),
           });
+        } catch (e) {
+          json(res, 200, { ok: false, error: e.message });
+        } finally { cli.close(); }
+      })();
+      return;
+    }
+    // Amperaje de las pelleteras (CPM/KAHL) en una ventana [from,to] (epoch ms).
+    // data_pelleteras tiene ~22M filas y muestrea cada ~2 s → se acota por el índice
+    // de fechahora y se AGREGA por buckets en SQL (no se transfieren millones de filas):
+    //   ~600 puntos por serie, independiente del largo de la producción.
+    if (url.pathname === '/api/producciones/pelleteras') {
+      const from = parseInt(url.searchParams.get('from') || '', 10);
+      const to = parseInt(url.searchParams.get('to') || '', 10);
+      if (!Number.isInteger(from) || !Number.isInteger(to) || to <= from) {
+        return json(res, 400, { ok: false, error: 'rango inválido' });
+      }
+      (async () => {
+        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        try {
+          await cli.connect();
+          const fromS = Math.floor(from / 1000), toS = Math.floor(to / 1000);
+          const bucket = Math.max(2, Math.ceil((toS - fromS) / 600)); // ~600 puntos/serie
+          const cond = `tipo='AMPERAJE' AND subtipo IN ('CPM','KAHL')
+             AND fechahora >= FROM_UNIXTIME(${fromS}) AND fechahora <= FROM_UNIXTIME(${toS})`;
+          const rows = (await cli.query(
+            `SELECT subtipo, FLOOR(UNIX_TIMESTAMP(fechahora)/${bucket})*${bucket} AS b, AVG(valor) AS v
+             FROM segra_fabrica.data_pelleteras
+             WHERE ${cond}
+             GROUP BY subtipo, FLOOR(UNIX_TIMESTAMP(fechahora)/${bucket}) ORDER BY b`
+          )).rows;
+          const cpm = [], kahl = [];
+          for (const r of rows) {
+            const pt = { t: Number(r.b) * 1000, y: Number(r.v) };
+            (r.subtipo === 'CPM' ? cpm : kahl).push(pt);
+          }
+          const stRows = (await cli.query(
+            `SELECT subtipo, MIN(valor) mn, MAX(valor) mx, AVG(valor) av
+             FROM segra_fabrica.data_pelleteras WHERE ${cond} GROUP BY subtipo`
+          )).rows;
+          const stats = {};
+          for (const s of stRows) stats[s.subtipo] = { min: Number(s.mn), max: Number(s.mx), avg: Number(s.av) };
+          json(res, 200, { ok: true, bucket, cpm, kahl, stats });
         } catch (e) {
           json(res, 200, { ok: false, error: e.message });
         } finally { cli.close(); }
