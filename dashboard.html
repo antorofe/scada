@@ -367,10 +367,12 @@
   <div class="card" id="prodActualCard">
     <div id="prodActualEmpty" style="text-align:center; color:var(--ink-2); padding:22px" hidden>Sin producción en curso.</div>
     <div id="prodActualBody">
-      <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:16px">
+      <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:6px">
         <span class="devstate off" id="prodEstado"><span class="led"></span>—</span>
         <div style="font-size:24px; font-weight:800; color:var(--ink-1)">Lote <span id="prodLote" class="tnum">—</span></div>
       </div>
+      <div id="prodProducto" style="font-size:17px; font-weight:700; color:var(--brand-b); margin-bottom:2px">—</div>
+      <div id="prodMeta" style="color:var(--ink-2); font-size:13px; margin-bottom:16px">—</div>
       <div class="prodgrid">
         <div class="ptile"><div class="label">Inicio</div><div class="val tnum" id="prodInicio">—</div></div>
         <div class="ptile"><div class="label">Transcurrido</div><div class="val tnum" id="prodDur">—</div></div>
@@ -393,10 +395,10 @@
     <div style="overflow-x:auto">
       <table class="prodtable" id="prodTable">
         <thead>
-          <tr><th>Lote</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Batches</th><th>Energía</th><th>Costo</th><th>Estado</th></tr>
+          <tr><th>Lote</th><th>Producto</th><th>Cliente</th><th>Tipo</th><th>Formato</th><th>kg</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Batches</th><th>Energía</th><th>Costo</th><th>Estado</th></tr>
         </thead>
         <tbody id="prodTbody">
-          <tr><td colspan="8" style="text-align:center; color:var(--ink-2); padding:20px">Cargando…</td></tr>
+          <tr><td colspan="13" style="text-align:center; color:var(--ink-2); padding:20px">Cargando…</td></tr>
         </tbody>
       </table>
     </div>
@@ -1125,7 +1127,7 @@ async function cargarProducciones() {
     renderProdActual(r.actual);
     renderProdLista(r.lista || [], r.actual);
   } catch (e) {
-    $("#prodTbody").innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
+    $("#prodTbody").innerHTML = `<tr><td colspan="13" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
   }
 }
 
@@ -1141,6 +1143,8 @@ function renderProdActual(a) {
   const st = $("#prodEstado");
   st.className = "devstate on"; st.innerHTML = '<span class="led"></span>En marcha';
   $("#prodLote").textContent = a.lote ?? "—";
+  $("#prodProducto").textContent = a.producto || (a.cod_producto != null ? `Producto ${a.cod_producto}` : "—");
+  $("#prodMeta").textContent = prodMetaLinea(a) || "—";
   $("#prodInicio").textContent = fmtFechaHora(a.inicio);
   $("#prodDur").textContent = fmtDuracion(a.inicio, prodServerNow);
   const prod = numOrDash(a.producidos), prog = numOrDash(a.programados);
@@ -1159,9 +1163,16 @@ function costoEnergia(kwh) {
   if (kwh == null || !(cfg.kwhValue > 0)) return "—";
   return `${cfg.currency}${fmt(kwh * cfg.kwhValue, 0)}`;
 }
+// Línea de meta del lote: cliente · tipo · formato · kg · cód producto.
+function prodMetaLinea(o) {
+  const kg = numOrDash(o.kg);
+  return [o.cliente, o.tipo, o.formato, kg != null ? fmt(kg, 0) + " kg" : null,
+          o.cod_producto != null ? "cód " + o.cod_producto : null].filter(Boolean).join(" · ");
+}
+function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 
 function renderProdLista(lista, actual) {
-  if (!lista.length) { $("#prodTbody").innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--ink-2); padding:20px">Sin producciones.</td></tr>`; return; }
+  if (!lista.length) { $("#prodTbody").innerHTML = `<tr><td colspan="13" style="text-align:center; color:var(--ink-2); padding:20px">Sin producciones.</td></tr>`; return; }
   const enCursoLote = (actual && String(actual.en_marcha) === "1") ? String(actual.lote) : null;
   $("#prodTbody").innerHTML = lista.map(r => {
     const enCurso = String(r.lote) === enCursoLote;
@@ -1172,8 +1183,15 @@ function renderProdLista(lista, actual) {
       : '<span class="badge done">Finalizada</span>';
     const fin = enCurso ? "—" : fmtFechaHora(r.fin);
     const kwh = numOrDash(r.kwh);
+    const kg = numOrDash(r.kg);
+    const producto = r.producto ? esc(r.producto) : (r.cod_producto != null ? "cód " + r.cod_producto : "—");
     return `<tr class="${enCurso ? "curr" : ""}">
       <td class="tnum"><b>${r.lote}</b></td>
+      <td title="${r.cod_producto != null ? "cód " + r.cod_producto : ""}">${producto}</td>
+      <td>${r.cliente ? esc(r.cliente) : "—"}</td>
+      <td>${r.tipo ? esc(r.tipo) : "—"}</td>
+      <td>${r.formato ? esc(r.formato) : "—"}</td>
+      <td class="tnum">${kg != null ? fmt(kg, 0) : "—"}</td>
       <td class="tnum">${fmtFechaHora(r.inicio)}</td>
       <td class="tnum">${fin}</td>
       <td class="tnum">${fmtDuracion(r.inicio, enCurso ? prodServerNow : r.fin)}</td>

@@ -352,6 +352,25 @@ const server = http.createServer((req, res) => {
             )).rows;
             for (const ev of evs) (eventosPorLote[String(ev.lote)] ||= []).push(ev);
           }
+
+          // Datos de programación del lote (base 'segra'): producto (nombre desde
+          // segra.productos vía cod_producto), cliente, kg, tipo y formato.
+          const progPorLote = {};
+          if (lotes.length) {
+            const prog = (await cli.query(
+              `SELECT pg.lote, pr.nombre AS producto, pg.cod_producto, pg.cliente,
+                      pg.kg_produccion AS kg, pg.tipo, pg.formato
+               FROM segra.programacion pg
+               LEFT JOIN segra.productos pr ON pr.id = pg.cod_producto
+               WHERE pg.lote IN (${lotes.join(',')})`
+            )).rows;
+            for (const p of prog) progPorLote[String(p.lote)] = p;
+          }
+          const attachProg = (obj) => {
+            const p = obj && progPorLote[String(obj.lote)];
+            if (p) { obj.producto = p.producto; obj.cod_producto = p.cod_producto; obj.cliente = p.cliente; obj.kg = p.kg; obj.tipo = p.tipo; obj.formato = p.formato; }
+          };
+
           const runningLote = (actual && String(actual.en_marcha) === '1') ? String(actual.lote) : null;
           const ahora = Date.now();
           for (const row of lista) {
@@ -365,10 +384,12 @@ const server = http.createServer((req, res) => {
               const firma = row.last_ms != null ? Number(row.last_ms) : null;
               row.kwh = tramos.length ? energiaLoteActivaGuardada(Number(row.lote), tramos, firma) : null;
             }
+            attachProg(row);
           }
           if (actual) {
             const evs = eventosPorLote[String(actual.lote)] || [];
             actual.kwh = evs.length ? energiaTramos(tramosActivos(evs, ahora)).kwh : null;
+            attachProg(actual);
           }
           json(res, 200, { ok: true, serverNow, actual, lista });
         } catch (e) {
