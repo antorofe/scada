@@ -463,9 +463,10 @@ const server = http.createServer((req, res) => {
       })();
       return;
     }
-    // Detalle de batches producidos de un lote: cada evento BATCH_PRODUCIDOS (valor>0)
-    // con su hora. El cliente calcula minutos entre batch y kg/min (kg_batch / min).
-    if (url.pathname === '/api/producciones/batches') {
+    // Detalle de un lote: batches producidos (cada BATCH_PRODUCIDOS con su hora) y
+    // segmentos de producción (para el tiempo activo). Sirve para cualquier lote,
+    // en curso o terminado. El cliente calcula minutos/kg-min y duraciones.
+    if (url.pathname === '/api/producciones/detalle' || url.pathname === '/api/producciones/batches') {
       const lote = parseInt(url.searchParams.get('lote') || '', 10);
       if (!Number.isInteger(lote)) { return json(res, 400, { ok: false, error: 'lote inválido' }); }
       (async () => {
@@ -486,11 +487,18 @@ const server = http.createServer((req, res) => {
              WHERE lote=${lote} AND variable='BATCH_PRODUCIDOS' AND CAST(valor AS UNSIGNED) > 0
              ORDER BY id`
           )).rows;
+          const iniEvs = (await cli.query(
+            `SELECT valor, UNIX_TIMESTAMP(fecha)*1000 AS ms, fecha FROM segra_fabrica.data_ciclado
+             WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' ORDER BY id`
+          )).rows;
+          const enMarcha = iniEvs.length ? iniEvs[iniEvs.length - 1].valor : null;
           json(res, 200, {
             ok: true, lote, serverNow,
             kg_batch: kgBatch ? kgBatch.kg_batch : null,
             inicio_ms: inicio ? inicio.inicio_ms : null,
+            en_marcha: enMarcha,
             batches,
+            segmentos: segmentosProduccion(iniEvs),
           });
         } catch (e) {
           json(res, 200, { ok: false, error: e.message });
