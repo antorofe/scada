@@ -150,6 +150,27 @@ function tramosActivos(eventos, cierreMs) {
   if (abierto != null && cierreMs != null) tramos.push([abierto, cierreMs]);
   return tramos;
 }
+// Batches producidos/programados de un lote, corrigiendo los reinicios del contador.
+// El contador BATCH_PRODUCIDOS se reinicia al pausar/reanudar y suele reprogramarse
+// (BATCH_PROGRAMADOS baja: p. ej. 20 → 17 cuando ya había 3 hechos). Por eso:
+//   producidos = (programados_total − programados_actual) + máx del segmento actual
+//   programados = programados_total (el objetivo del lote)
+// prodVals/progVals: valores (enteros, en orden por id); los 0 son marcadores de
+// reinicio/fin, no batches.
+function calcBatches(prodVals, progVals) {
+  const progNZ = progVals.filter(v => v > 0);
+  const progTotal = progNZ.length ? Math.max(...progNZ) : null;
+  const progActual = progNZ.length ? progNZ[progNZ.length - 1] : null;
+  const hechosAntes = (progTotal != null && progActual != null) ? Math.max(0, progTotal - progActual) : 0;
+  let segMax = 0, prev = null;                 // máx del último segmento del contador
+  for (const v of prodVals) {
+    if (v === 0) continue;                      // marcador de reset/fin, no es batch
+    if (prev != null && v < prev) segMax = 0;   // el contador bajó → nuevo segmento
+    segMax = Math.max(segMax, v);
+    prev = v;
+  }
+  return { producidos: hechosAntes + segMax, programados: progTotal };
+}
 // Suma la energía del PFW03 sobre una lista de tramos [from,to] (kWh).
 function energiaTramos(tramos) {
   let kwh = 0, samples = 0;
@@ -359,6 +380,16 @@ const server = http.createServer((req, res) => {
                WHERE pg.lote=${lote} LIMIT 1`
             )).rows[0];
             if (p) Object.assign(actual, p);
+            // Batches producidos/programados corrigiendo los reinicios del contador.
+            const bv = (await cli.query(
+              `SELECT variable, CAST(valor AS SIGNED) AS v FROM segra_fabrica.data_ciclado
+               WHERE lote=${lote} AND variable IN ('BATCH_PRODUCIDOS','BATCH_PROGRAMADOS') ORDER BY id`
+            )).rows;
+            const cb = calcBatches(
+              bv.filter(x => x.variable === 'BATCH_PRODUCIDOS').map(x => Number(x.v)),
+              bv.filter(x => x.variable === 'BATCH_PROGRAMADOS').map(x => Number(x.v))
+            );
+            actual.producidos = cb.producidos; actual.programados = cb.programados;
           }
 
           // Energía + programación de las últimas producciones (solo si se pidió la lista).
@@ -383,6 +414,17 @@ const server = http.createServer((req, res) => {
               const p = obj && progPorLote[String(obj.lote)];
               if (p) { obj.producto = p.producto; obj.cod_producto = p.cod_producto; obj.cliente = p.cliente; obj.kg = p.kg; obj.kg_batch = p.kg_batch; obj.tipo = p.tipo; obj.formato = p.formato; }
             };
+            // Eventos de batch por lote → producidos/programados corregidos por reinicios.
+            const batchPorLote = {};
+            const bevs = (await cli.query(
+              `SELECT lote, variable, CAST(valor AS SIGNED) AS v FROM segra_fabrica.data_ciclado
+               WHERE variable IN ('BATCH_PRODUCIDOS','BATCH_PROGRAMADOS') AND lote IN (${lotes.join(',')})
+               ORDER BY lote, id`
+            )).rows;
+            for (const e of bevs) {
+              const b = (batchPorLote[String(e.lote)] ||= { prod: [], prog: [] });
+              (e.variable === 'BATCH_PRODUCIDOS' ? b.prod : b.prog).push(Number(e.v));
+            }
             const runningLote = (actual && String(actual.en_marcha) === '1') ? String(actual.lote) : null;
             for (const row of lista) {
               const evsL = eventosPorLote[String(row.lote)] || [];
@@ -396,6 +438,8 @@ const server = http.createServer((req, res) => {
                 row.kwh = tramos.length ? energiaLoteActivaGuardada(Number(row.lote), tramos, firma) : null;
               }
               attachProg(row);
+              const b = batchPorLote[String(row.lote)];
+              if (b) { const cb = calcBatches(b.prod, b.prog); row.producidos = cb.producidos; row.programados = cb.programados; }
             }
           }
           json(res, 200, { ok: true, serverNow, actual, lista });
