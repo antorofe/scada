@@ -314,6 +314,59 @@
   .chart-zoom:hover { background: color-mix(in srgb, var(--brand-b) 12%, transparent); color: var(--brand-b); border-color: var(--brand-b); }
   #zoomCard { background: var(--card); border-radius: 14px; width: 85vw; height: 85vh; padding: 16px 18px; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
   #zoomWrap { position: relative; flex: 1; min-height: 0; }
+
+  /* ---------- Responsive: teléfonos móviles ---------- */
+  @media (max-width: 680px) {
+    /* Cabecera compacta y apilada */
+    header { flex-direction: column; align-items: stretch; gap: 8px; padding: 9px 12px; }
+    .brand .logo { height: 36px; }
+    .brand h1 { font-size: 15.5px; }
+    .brand .sub { font-size: 10.5px; }
+    .hstatus { justify-content: space-between; flex-wrap: wrap; gap: 8px 10px; }
+    .clock { font-size: 13px; }
+    .pill { padding: 5px 10px; font-size: 11.5px; }
+    /* Tarjeta de producción: fila propia, a lo ancho */
+    .hprod { order: 5; flex: 1 1 100%; padding: 6px 10px; }
+    .hprod .hp-name { max-width: none; }
+
+    /* Navegación: pestañas desplazables y más compactas */
+    .topnav { padding: 0 4px; }
+    .topnav button { padding: 12px 11px; font-size: 12.5px; }
+
+    /* Barra de rango: apilada */
+    .subbar { flex-direction: column; align-items: stretch; gap: 8px; padding: 9px 12px; }
+    .ranges { flex-wrap: wrap; }
+    .ranges button { flex: 1 1 auto; }
+
+    /* Contenido: menos padding, tiles más chicos */
+    main { padding: 12px 10px 44px; }
+    .card { padding: 12px 12px; }
+    .tiles { grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); gap: 10px; }
+    .tile { padding: 11px 12px; }
+    .tile .val { font-size: 21px; }
+
+    /* Producción en curso: 2 columnas de tiles */
+    .prodgrid { grid-template-columns: 1fr 1fr; gap: 10px; }
+    .ptile { padding: 10px 11px; }
+    .ptile .val { font-size: 18px; }
+    .chart-wrap { height: 180px; }
+
+    /* Modales a casi toda la pantalla */
+    .modal-overlay { padding: 8px; }
+    .modal-card { max-height: 94vh; }
+    .modal-head { padding: 14px 15px; }
+    .modal-body { padding: 6px 14px 16px; }
+    #zoomCard { width: 96vw; height: 90vh; padding: 12px; }
+    /* Modal ampliado: una sola columna en móvil */
+    .modal-card.full .dt-charts,
+    .modal-card.full .dt-tables { grid-template-columns: 1fr; }
+    .modal-card.full .dt-charts > .chart-block:first-child { grid-column: auto; }
+    .modal-card.full .chart-block .chart-wrap { height: 42vh; }
+  }
+  @media (max-width: 400px) {
+    .brand .sub { display: none; }
+    .tiles { grid-template-columns: 1fr 1fr; }
+  }
 </style>
 </head>
 <body>
