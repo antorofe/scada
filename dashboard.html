@@ -979,7 +979,8 @@ const VIEWS = { dash: "#dashView", reportes: "#histView", almacen: "#almView", p
 // Estado de Producciones: declarado aquí (antes del deep-link que invoca showView)
 // para que no quede en TDZ si se entra directo con #producciones al cargar.
 let prodServerNow = null;
-let prodTimer = null;
+let prodActualData = null, prodSyncLocal = 0;       // último dato en curso + ancla de reloj
+let prodTimerActual = null, prodTimerLista = null, prodTimerDur = null;
 function showView(v) {
   if (!VIEWS[v]) v = "dash";
   for (const k in VIEWS) $(VIEWS[k]).hidden = (k !== v);
@@ -1106,7 +1107,18 @@ $("#btnSaveDev").addEventListener("click", async () => {
 
 /* ---------- Producciones (data_ciclado de la BD de producción) ---------- */
 // Parsea "YYYY-MM-DD HH:MM:SS" (hora local del servidor) a Date.
-function parseFecha(s) { return s ? new Date(String(s).replace(" ", "T")) : null; }
+function parseFecha(s) {
+  if (s == null) return null;
+  if (typeof s === "number") return new Date(s);
+  if (s instanceof Date) return s;
+  return new Date(String(s).replace(" ", "T"));
+}
+// Hora "ahora" del servidor de BD estimada localmente entre refrescos (serverNow + Δlocal).
+function serverNowMs() {
+  const base = parseFecha(prodServerNow);
+  if (!base || isNaN(base)) return Date.now();
+  return base.getTime() + (Date.now() - prodSyncLocal);
+}
 function fmtFechaHora(s) {
   const d = parseFecha(s); if (!d || isNaN(d)) return "—";
   return d.toLocaleString("es-CL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
@@ -1122,16 +1134,35 @@ function fmtDuracion(iniStr, finStr) {
 }
 function numOrDash(v) { return (v === null || v === undefined || v === "") ? null : Number(v); }
 
+// Carga completa (producción en curso + últimas 20). Se usa al entrar y cada 15 s.
 async function cargarProducciones() {
   try {
     const r = await fetch("/api/producciones?limit=20").then(x => x.json());
     if (!r.ok) throw new Error(r.error || "sin datos");
-    prodServerNow = r.serverNow || null;
+    prodServerNow = r.serverNow || null; prodSyncLocal = Date.now();
+    prodActualData = r.actual || null;
     renderProdActual(r.actual);
     renderProdLista(r.lista || [], r.actual);
   } catch (e) {
     $("#prodTbody").innerHTML = `<tr><td colspan="14" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
   }
+}
+// Refresco liviano SOLO de la producción en curso (AJAX cada 2 s → tiempo real).
+async function refrescarActual() {
+  try {
+    const r = await fetch("/api/producciones?solo=actual").then(x => x.json());
+    if (!r.ok) return;
+    prodServerNow = r.serverNow || null; prodSyncLocal = Date.now();
+    prodActualData = r.actual || null;
+    renderProdActual(r.actual);
+  } catch (_) {}
+}
+// Avanza el "transcurrido" cada segundo entre refrescos (sin pegarle a la BD).
+function tickProdDur() {
+  const a = prodActualData;
+  if (!a || String(a.en_marcha) !== "1") return;
+  const el = document.getElementById("prodDur");
+  if (el) el.textContent = fmtDuracion(a.inicio, serverNowMs());
 }
 
 function renderProdActual(a) {
@@ -1149,7 +1180,7 @@ function renderProdActual(a) {
   $("#prodProducto").textContent = a.producto || (a.cod_producto != null ? `Producto ${a.cod_producto}` : "—");
   $("#prodMeta").textContent = prodMetaLinea(a) || "—";
   $("#prodInicio").textContent = fmtFechaHora(a.inicio);
-  $("#prodDur").textContent = fmtDuracion(a.inicio, prodServerNow);
+  $("#prodDur").textContent = fmtDuracion(a.inicio, serverNowMs());
   const prod = numOrDash(a.producidos), prog = numOrDash(a.programados);
   $("#prodProd").textContent = prod ?? "—";
   $("#prodProg").textContent = prog ?? "—";
@@ -1223,8 +1254,16 @@ function renderProdLista(lista, actual) {
   }).join("");
 }
 
-function startProdPoll() { if (!prodTimer) prodTimer = setInterval(cargarProducciones, 5000); }
-function stopProdPoll() { if (prodTimer) { clearInterval(prodTimer); prodTimer = null; } }
+function startProdPoll() {
+  if (prodTimerActual) return;                        // ya activo
+  prodTimerActual = setInterval(refrescarActual, 2000);   // producción en curso: cada 2 s
+  prodTimerLista = setInterval(cargarProducciones, 15000); // lista completa: cada 15 s
+  prodTimerDur = setInterval(tickProdDur, 1000);           // transcurrido: cada 1 s
+}
+function stopProdPoll() {
+  clearInterval(prodTimerActual); clearInterval(prodTimerLista); clearInterval(prodTimerDur);
+  prodTimerActual = prodTimerLista = prodTimerDur = null;
+}
 
 /* ---------- MySQL: prueba de conexión a la BD de producción ---------- */
 async function probarMysql() {

@@ -287,6 +287,9 @@ const server = http.createServer((req, res) => {
     // así que se castea a entero para los conteos de batch. Solo lectura.
     if (url.pathname === '/api/producciones') {
       const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '20', 10)));
+      // ?solo=actual → solo la producción en curso (refresco liviano en tiempo real,
+      // sin recalcular la lista de las últimas producciones).
+      const soloActual = url.searchParams.get('solo') === 'actual';
       (async () => {
         const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
         try {
@@ -300,7 +303,7 @@ const server = http.createServer((req, res) => {
           // correlacionar con pfw03.db, que guarda epoch UTC (los relojes están en husos
           // distintos: la BD en hora local, la caja SCADA en UTC). last_ms = último evento
           // del lote (respaldo de fin cuando no hay evento explícito valor=0).
-          const lista = (await cli.query(
+          const lista = soloActual ? [] : (await cli.query(
             `SELECT lote,
                 MIN(CASE WHEN variable='PRODUCCION_INICIADA' AND valor='1' THEN fecha END) AS inicio,
                 MAX(CASE WHEN variable='PRODUCCION_INICIADA' AND valor='0' THEN fecha END) AS fin,
@@ -338,58 +341,62 @@ const server = http.createServer((req, res) => {
             )).rows[0] || null;
           }
 
-          // Energía por lote (kWh) SOLO de los tramos activos (se excluyen las pausas).
-          // Se traen todos los eventos PRODUCCION_INICIADA de los lotes listados en una
-          // sola consulta y se arman los tramos por lote.
-          const lotes = lista.map(r => Number(r.lote)).filter(n => !isNaN(n));
-          const eventosPorLote = {};
-          if (lotes.length) {
+          const ahora = Date.now();
+
+          // Energía (tramos activos) + programación del lote EN CURSO, con consultas
+          // dedicadas de un solo lote → sirve para el refresco liviano ?solo=actual.
+          if (actual) {
+            const lote = Number(actual.lote);
             const evs = (await cli.query(
-              `SELECT lote, valor, UNIX_TIMESTAMP(fecha)*1000 AS ms
-               FROM segra_fabrica.data_ciclado
-               WHERE variable='PRODUCCION_INICIADA' AND lote IN (${lotes.join(',')})
-               ORDER BY lote, id`
+              `SELECT valor, UNIX_TIMESTAMP(fecha)*1000 AS ms FROM segra_fabrica.data_ciclado
+               WHERE variable='PRODUCCION_INICIADA' AND lote=${lote} ORDER BY id`
             )).rows;
-            for (const ev of evs) (eventosPorLote[String(ev.lote)] ||= []).push(ev);
+            actual.kwh = evs.length ? energiaTramos(tramosActivos(evs, ahora)).kwh : null;
+            const p = (await cli.query(
+              `SELECT pr.nombre AS producto, pg.cod_producto, pg.cliente, pg.kg_produccion AS kg,
+                      pg.kg_batch, pg.tipo, pg.formato
+               FROM segra.programacion pg LEFT JOIN segra.productos pr ON pr.id = pg.cod_producto
+               WHERE pg.lote=${lote} LIMIT 1`
+            )).rows[0];
+            if (p) Object.assign(actual, p);
           }
 
-          // Datos de programación del lote (base 'segra'): producto (nombre desde
-          // segra.productos vía cod_producto), cliente, kg, tipo y formato.
-          const progPorLote = {};
-          if (lotes.length) {
+          // Energía + programación de las últimas producciones (solo si se pidió la lista).
+          // Los eventos y la programación de los lotes se traen en una sola consulta cada uno.
+          if (lista.length) {
+            const lotes = lista.map(r => Number(r.lote)).filter(n => !isNaN(n));
+            const eventosPorLote = {};
+            const evs = (await cli.query(
+              `SELECT lote, valor, UNIX_TIMESTAMP(fecha)*1000 AS ms FROM segra_fabrica.data_ciclado
+               WHERE variable='PRODUCCION_INICIADA' AND lote IN (${lotes.join(',')}) ORDER BY lote, id`
+            )).rows;
+            for (const ev of evs) (eventosPorLote[String(ev.lote)] ||= []).push(ev);
+            const progPorLote = {};
             const prog = (await cli.query(
               `SELECT pg.lote, pr.nombre AS producto, pg.cod_producto, pg.cliente,
                       pg.kg_produccion AS kg, pg.kg_batch, pg.tipo, pg.formato
-               FROM segra.programacion pg
-               LEFT JOIN segra.productos pr ON pr.id = pg.cod_producto
+               FROM segra.programacion pg LEFT JOIN segra.productos pr ON pr.id = pg.cod_producto
                WHERE pg.lote IN (${lotes.join(',')})`
             )).rows;
             for (const p of prog) progPorLote[String(p.lote)] = p;
-          }
-          const attachProg = (obj) => {
-            const p = obj && progPorLote[String(obj.lote)];
-            if (p) { obj.producto = p.producto; obj.cod_producto = p.cod_producto; obj.cliente = p.cliente; obj.kg = p.kg; obj.kg_batch = p.kg_batch; obj.tipo = p.tipo; obj.formato = p.formato; }
-          };
-
-          const runningLote = (actual && String(actual.en_marcha) === '1') ? String(actual.lote) : null;
-          const ahora = Date.now();
-          for (const row of lista) {
-            const evs = eventosPorLote[String(row.lote)] || [];
-            const enCurso = String(row.lote) === runningLote;
-            const cierre = enCurso ? ahora : (row.last_ms != null ? Number(row.last_ms) : null);
-            const tramos = tramosActivos(evs, cierre);
-            if (enCurso) {
-              row.kwh = energiaTramos(tramos).kwh;                 // en curso → tramos hasta ahora
-            } else {
-              const firma = row.last_ms != null ? Number(row.last_ms) : null;
-              row.kwh = tramos.length ? energiaLoteActivaGuardada(Number(row.lote), tramos, firma) : null;
+            const attachProg = (obj) => {
+              const p = obj && progPorLote[String(obj.lote)];
+              if (p) { obj.producto = p.producto; obj.cod_producto = p.cod_producto; obj.cliente = p.cliente; obj.kg = p.kg; obj.kg_batch = p.kg_batch; obj.tipo = p.tipo; obj.formato = p.formato; }
+            };
+            const runningLote = (actual && String(actual.en_marcha) === '1') ? String(actual.lote) : null;
+            for (const row of lista) {
+              const evsL = eventosPorLote[String(row.lote)] || [];
+              const enCurso = String(row.lote) === runningLote;
+              const cierre = enCurso ? ahora : (row.last_ms != null ? Number(row.last_ms) : null);
+              const tramos = tramosActivos(evsL, cierre);
+              if (enCurso) {
+                row.kwh = energiaTramos(tramos).kwh;               // en curso → tramos hasta ahora
+              } else {
+                const firma = row.last_ms != null ? Number(row.last_ms) : null;
+                row.kwh = tramos.length ? energiaLoteActivaGuardada(Number(row.lote), tramos, firma) : null;
+              }
+              attachProg(row);
             }
-            attachProg(row);
-          }
-          if (actual) {
-            const evs = eventosPorLote[String(actual.lote)] || [];
-            actual.kwh = evs.length ? energiaTramos(tramosActivos(evs, ahora)).kwh : null;
-            attachProg(actual);
           }
           json(res, 200, { ok: true, serverNow, actual, lista });
         } catch (e) {
