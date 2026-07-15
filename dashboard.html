@@ -413,6 +413,16 @@
         </div>
         <div class="progbar"><div class="progfill" id="prodFill" style="width:0%"></div></div>
       </div>
+      <div class="chart-card" style="margin-top:18px; border-top:1px solid var(--border); padding-top:16px">
+        <div class="top"><div class="name"><span class="swatch" style="background:var(--series-i)"></span>Corriente — desde el inicio de la producción</div>
+          <div class="now tnum"><span id="prodNowI">—</span><small> A</small></div></div>
+        <div class="chart-wrap"><canvas id="prodCanvasI"></canvas><div class="tooltip" id="prodTipI"></div></div>
+        <div class="chart-stats">
+          <span>Mín <b class="tnum" id="prodMinI">—</b></span>
+          <span>Prom <b class="tnum" id="prodAvgI">—</b></span>
+          <span>Máx <b class="tnum" id="prodMaxI">—</b></span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1017,7 +1027,7 @@ const VIEWS = { dash: "#dashView", reportes: "#histView", almacen: "#almView", p
 // para que no quede en TDZ si se entra directo con #producciones al cargar.
 let prodServerNow = null;
 let prodActualData = null, prodSyncLocal = 0;       // último dato en curso + ancla de reloj
-let prodTimerActual = null, prodTimerLista = null, prodTimerDur = null;
+let prodTimerActual = null, prodTimerLista = null, prodTimerDur = null, prodTimerChart = null;
 let loteExpandido = null;                            // lote con el detalle desplegado
 function cerrarDetalle() { const m = document.getElementById("detalleModal"); if (m) m.hidden = true; }
 function showView(v) {
@@ -1198,6 +1208,7 @@ async function cargarProducciones() {
     prodActualData = r.actual || null;
     renderProdActual(r.actual);
     renderProdLista(r.lista || [], r.actual);
+    refrescarProdChart();
   } catch (e) {
     $("#prodTbody").innerHTML = `<tr><td colspan="15" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
   }
@@ -1329,10 +1340,33 @@ function startProdPoll() {
   prodTimerActual = setInterval(refrescarActual, 2000);   // producción en curso: cada 2 s
   prodTimerLista = setInterval(cargarProducciones, 15000); // lista completa: cada 15 s
   prodTimerDur = setInterval(tickProdDur, 1000);           // transcurrido: cada 1 s
+  prodTimerChart = setInterval(refrescarProdChart, 8000);  // gráfica de corriente: cada 8 s
 }
 function stopProdPoll() {
-  clearInterval(prodTimerActual); clearInterval(prodTimerLista); clearInterval(prodTimerDur);
-  prodTimerActual = prodTimerLista = prodTimerDur = null;
+  clearInterval(prodTimerActual); clearInterval(prodTimerLista); clearInterval(prodTimerDur); clearInterval(prodTimerChart);
+  prodTimerActual = prodTimerLista = prodTimerDur = prodTimerChart = null;
+}
+// Gráfica de Corriente de la producción en curso (desde el inicio hasta ahora),
+// con Mín/Prom/Máx (agregación SQL, como en Variables monitoreadas).
+let prodChartI = null;
+async function refrescarProdChart() {
+  const a = prodActualData;
+  if (!a || String(a.en_marcha) !== "1" || a.inicio_ms == null) return; // el gráfico se oculta con prodActualBody
+  if (!prodChartI) prodChartI = new LineChart($("#prodCanvasI"), { colorVar: "--series-i", unit: "A", dec: 1, tip: $("#prodTipI") });
+  const from = Number(a.inicio_ms), to = Date.now();
+  try {
+    const [h, m] = await Promise.all([
+      fetch(`/api/history?from=${from}&to=${to}`).then(x => x.json()),
+      fetch(`/api/minmax?from=${from}&to=${to}`).then(x => x.json()),
+    ]);
+    const pts = (h.points || []).map(p => ({ t: p.t, y: p.i })).filter(p => p.y != null);
+    prodChartI.setData(pts, [from, to]);
+    $("#prodMinI").textContent = m.i_min != null ? fmt(m.i_min, 1) + " A" : "—";
+    $("#prodAvgI").textContent = m.i_avg != null ? fmt(m.i_avg, 1) + " A" : "—";
+    $("#prodMaxI").textContent = m.i_max != null ? fmt(m.i_max, 1) + " A" : "—";
+    const last = pts.length ? pts[pts.length - 1].y : null;
+    $("#prodNowI").textContent = last != null ? fmt(last, 1) : "—";
+  } catch (_) {}
 }
 
 /* ---------- Detalle del lote (tiempo transcurrido + batches) ---------- */
