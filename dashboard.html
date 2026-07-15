@@ -378,6 +378,7 @@
         <div class="ptile"><div class="label">Transcurrido</div><div class="val tnum" id="prodDur">—</div></div>
         <div class="ptile"><div class="label">Batches producidos</div><div class="val tnum" id="prodProd">—</div></div>
         <div class="ptile"><div class="label">Batches programados</div><div class="val tnum" id="prodProg">—</div></div>
+        <div class="ptile"><div class="label">Tamaño del batch</div><div class="val tnum"><span id="prodKgBatch">—</span><small> kg</small></div></div>
         <div class="ptile" style="--hero:var(--good)"><div class="label">Energía consumida</div><div class="val tnum"><span id="prodKwh">—</span><small> kWh</small></div></div>
         <div class="ptile"><div class="label">Costo energía</div><div class="val tnum" style="color:var(--series-fp)" id="prodCosto">—</div></div>
         <div class="ptile"><div class="label">Kg producidos (parcial)</div><div class="val tnum"><span id="prodKg">—</span><small> kg</small></div></div>
@@ -1161,6 +1162,7 @@ function renderProdActual(a) {
   $("#prodCosto").textContent = costoEnergia(kwh);
   // Parcial en curso: kg producidos = batches producidos × kg_batch; $/kg sobre esos kg.
   const kgBatch = numOrDash(a.kg_batch);
+  $("#prodKgBatch").textContent = kgBatch != null ? fmt(kgBatch, 0) : "—";
   const kgProd = (prod != null && kgBatch != null) ? prod * kgBatch : null;
   $("#prodKg").textContent = kgProd != null ? fmt(kgProd, 0) : "—";
   const costoNum = (kwh != null && cfg.kwhValue > 0) ? kwh * cfg.kwhValue : null;
