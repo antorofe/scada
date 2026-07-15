@@ -19,6 +19,7 @@
     --series-fp: #0a8f3c;  /* Factor de potencia */
     --amp-cpm: #2f80ed;    /* Amperaje pelletera CPM */
     --amp-kahl: #8b5cf6;   /* Amperaje pelletera KAHL */
+    --temp: #d64550;       /* Temperatura pelleteras (eje derecho) */
     /* Estado */
     --good: #0ca30c; --warn: #e6a000; --serious: #ec7a3c; --critical: #d03b3b;
     --shadow: 0 1px 3px rgba(16,35,59,.08), 0 1px 2px rgba(16,35,59,.04);
@@ -30,7 +31,7 @@
       --ink-1: #f0f3f7; --ink-2: #9fb0c3; --ink-muted: #6c7a8c;
       --grid: #232a33; --axis: #313a45; --border: rgba(255,255,255,0.09);
       --series-p: #3987e5; --series-i: #e2743e; --series-fp: #22a651;
-      --amp-cpm: #4b9bff; --amp-kahl: #a78bfa;
+      --amp-cpm: #4b9bff; --amp-kahl: #a78bfa; --temp: #e26571;
       --good: #2fbf2f; --warn: #f2b423; --serious: #ef8b52; --critical: #e05a5a;
       --shadow: 0 1px 3px rgba(0,0,0,.4);
     }
@@ -423,20 +424,7 @@
           <span>Máx <b class="tnum" id="prodMaxI">—</b></span>
         </div>
       </div>
-      <div id="prodAmpWrap" hidden>
-        <div class="chart-card" style="margin-top:18px; border-top:1px solid var(--border); padding-top:16px">
-          <div class="top"><div class="name"><span class="swatch" style="background:var(--amp-cpm)"></span>Amperaje pelletera CPM</div>
-            <div class="now tnum"><span id="prodAmpCpmNow">—</span><small> A</small></div></div>
-          <div class="chart-wrap"><canvas id="prodAmpCpmCanvas"></canvas><div class="tooltip" id="prodAmpCpmTip"></div></div>
-          <div class="chart-stats"><span>Mín <b class="tnum" id="prodAmpCpmMin">—</b></span><span>Prom <b class="tnum" id="prodAmpCpmAvg">—</b></span><span>Máx <b class="tnum" id="prodAmpCpmMax">—</b></span></div>
-        </div>
-        <div class="chart-card" style="margin-top:16px">
-          <div class="top"><div class="name"><span class="swatch" style="background:var(--amp-kahl)"></span>Amperaje pelletera KAHL</div>
-            <div class="now tnum"><span id="prodAmpKahlNow">—</span><small> A</small></div></div>
-          <div class="chart-wrap"><canvas id="prodAmpKahlCanvas"></canvas><div class="tooltip" id="prodAmpKahlTip"></div></div>
-          <div class="chart-stats"><span>Mín <b class="tnum" id="prodAmpKahlMin">—</b></span><span>Prom <b class="tnum" id="prodAmpKahlAvg">—</b></span><span>Máx <b class="tnum" id="prodAmpKahlMax">—</b></span></div>
-        </div>
-      </div>
+      <div id="prodAmpWrap" hidden></div>
     </div>
   </div>
 
@@ -764,6 +752,83 @@ class LineChart {
           let lx = bx + 10; if (lx + tw > w) lx = bx - tw - 10;
           this.tip.style.left = lx + "px"; this.tip.style.top = Math.max(0, by - 34) + "px";
         }
+      }
+    }
+  }
+}
+
+// Gráfica de doble eje Y: serie izquierda (p.ej. amperaje) y derecha (p.ej. temperatura),
+// con escalas independientes. Datos ya diezmados por el servidor (buckets).
+class DualAxisChart {
+  constructor(canvas, opts) {
+    this.c = canvas; this.ctx = canvas.getContext("2d");
+    this.left = opts.left; this.right = opts.right; this.tip = opts.tip;
+    this.dataL = []; this.dataR = []; this.xRange = null; this.hover = null;
+    new ResizeObserver(() => this.render()).observe(canvas.parentElement);
+    canvas.addEventListener("mousemove", (e) => this.onMove(e));
+    canvas.addEventListener("mouseleave", () => { this.hover = null; if (this.tip) this.tip.style.display = "none"; this.render(); });
+  }
+  setData(d, range) { this.dataL = d.left || []; this.dataR = d.right || []; this.xRange = range || null; this.render(); }
+  onMove(e) { const r = this.c.getBoundingClientRect(); this.hover = { x: e.clientX - r.left, y: e.clientY - r.top }; this.render(); }
+  _yr(pts, t0, t1) {
+    let lo = Infinity, hi = -Infinity;
+    for (const p of pts) { if (p.t < t0 - 2000 || p.t > t1 + 2000) continue; if (p.y < lo) lo = p.y; if (p.y > hi) hi = p.y; }
+    if (!isFinite(lo)) { lo = 0; hi = 1; } if (hi - lo < 1e-6) { hi += 1; lo -= 1; }
+    const pad = (hi - lo) * 0.15; return [lo - pad, hi + pad];
+  }
+  render() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.c.parentElement.clientWidth, h = this.c.parentElement.clientHeight;
+    if (!w || !h) return;
+    this.c.width = w * dpr; this.c.height = h * dpr;
+    const ctx = this.ctx; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    const grid = cssVar("--grid"), axis = cssVar("--axis"), muted = cssVar("--ink-muted");
+    const cL = cssVar(this.left.colorVar), cR = cssVar(this.right.colorVar);
+    const P = { l: 44, r: 44, t: 8, b: 20 }, pw = w - P.l - P.r, ph = h - P.t - P.b;
+    let t0, t1; if (this.xRange) { t0 = this.xRange.t0; t1 = this.xRange.t1; } else { t1 = Date.now(); t0 = t1 - 5 * 60000; }
+    const span = t1 - t0;
+    const [lLo, lHi] = this._yr(this.dataL, t0, t1), [rLo, rHi] = this._yr(this.dataR, t0, t1);
+    const X = (t) => P.l + ((t - t0) / (t1 - t0)) * pw;
+    const YL = (y) => P.t + (1 - (y - lLo) / (lHi - lLo)) * ph;
+    const YR = (y) => P.t + (1 - (y - rLo) / (rHi - rLo)) * ph;
+    ctx.font = "11px system-ui, sans-serif"; ctx.textBaseline = "middle";
+    for (let i = 0; i <= 4; i++) {
+      const py = P.t + ph * i / 4;
+      ctx.strokeStyle = grid; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(P.l, py); ctx.lineTo(w - P.r, py); ctx.stroke();
+      ctx.fillStyle = cL; ctx.textAlign = "right"; ctx.fillText(fmt(lHi - (lHi - lLo) * i / 4, this.left.dec), P.l - 5, py);
+      ctx.fillStyle = cR; ctx.textAlign = "left"; ctx.fillText(fmt(rHi - (rHi - rLo) * i / 4, this.right.dec), w - P.r + 5, py);
+    }
+    ctx.fillStyle = muted; ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (let i = 0; i <= 4; i++) {
+      const tt = t0 + span * i / 4, px = X(tt), d = new Date(tt);
+      const hh = String(d.getHours()).padStart(2, "0"), mm = String(d.getMinutes()).padStart(2, "0");
+      const DD = String(d.getDate()).padStart(2, "0"), MM = String(d.getMonth() + 1).padStart(2, "0");
+      ctx.fillText(span <= 26 * 3600000 ? `${hh}:${mm}` : `${DD}/${MM} ${hh}:${mm}`, px, h - P.b + 5);
+    }
+    const linea = (pts, Y, color) => {
+      const f = pts.filter(p => p.t >= t0 - 2000 && p.t <= t1 + 2000);
+      if (f.length < 2) return;
+      ctx.beginPath(); ctx.moveTo(X(f[0].t), Y(f[0].y));
+      for (const p of f) ctx.lineTo(X(p.t), Y(p.y));
+      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+      const last = f[f.length - 1]; ctx.beginPath(); ctx.arc(X(last.t), Y(last.y), 3, 0, 7); ctx.fillStyle = color; ctx.fill();
+    };
+    linea(this.dataL, YL, cL); linea(this.dataR, YR, cR);
+    if (this.hover && this.hover.x >= P.l && this.hover.x <= w - P.r) {
+      const tH = t0 + ((this.hover.x - P.l) / pw) * span, hx = X(tH);
+      ctx.strokeStyle = axis; ctx.lineWidth = 1; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(hx, P.t); ctx.lineTo(hx, P.t + ph); ctx.stroke(); ctx.setLineDash([]);
+      const near = (pts) => { let b = null, bd = Infinity; for (const p of pts) { const d = Math.abs(p.t - tH); if (d < bd) { bd = d; b = p; } } return b; };
+      const bl = near(this.dataL), br = near(this.dataR);
+      if (bl) { ctx.beginPath(); ctx.arc(X(bl.t), YL(bl.y), 3.5, 0, 7); ctx.fillStyle = cL; ctx.fill(); }
+      if (br) { ctx.beginPath(); ctx.arc(X(br.t), YR(br.y), 3.5, 0, 7); ctx.fillStyle = cR; ctx.fill(); }
+      if (this.tip && (bl || br)) {
+        const d = new Date((bl || br).t);
+        let html = `<div class="t tnum">${d.toLocaleTimeString("es-CL")}</div>`;
+        if (bl) html += `<div class="tnum"><span style="color:${cL}">●</span> <b>${fmt(bl.y, this.left.dec)}</b> ${this.left.unit}</div>`;
+        if (br) html += `<div class="tnum"><span style="color:${cR}">●</span> <b>${fmt(br.y, this.right.dec)}</b> ${this.right.unit}</div>`;
+        this.tip.style.display = "block"; this.tip.innerHTML = html;
+        const tw = this.tip.offsetWidth; let lx = hx + 10; if (lx + tw > w) lx = hx - tw - 10;
+        this.tip.style.left = lx + "px"; this.tip.style.top = P.t + "px";
       }
     }
   }
@@ -1376,23 +1441,24 @@ async function refrescarProdChart() {
     $("#prodNowI").textContent = last != null ? fmt(last, 1) : "—";
   } catch (_) {}
 }
-// Amperaje CPM/KAHL en vivo, solo si la producción en curso es tipo PELLET.
-let prodAmpCpm = null, prodAmpKahl = null;
+// Amperaje + temperatura CPM/KAHL en vivo, solo si la producción en curso es PELLET.
+let prodChartCpm = null, prodChartKahl = null;
 async function refrescarProdAmperaje() {
   const a = prodActualData, wrap = $("#prodAmpWrap"); if (!wrap) return;
   const esPellet = a && String(a.en_marcha) === "1" && String(a.tipo).toUpperCase() === "PELLET" && a.inicio_ms != null;
   wrap.hidden = !esPellet;
   if (!esPellet) return;
-  if (!prodAmpCpm) prodAmpCpm = new LineChart($("#prodAmpCpmCanvas"), { colorVar: "--amp-cpm", unit: "A", dec: 0, tip: $("#prodAmpCpmTip") });
-  if (!prodAmpKahl) prodAmpKahl = new LineChart($("#prodAmpKahlCanvas"), { colorVar: "--amp-kahl", unit: "A", dec: 0, tip: $("#prodAmpKahlTip") });
+  if (!prodChartCpm) {   // se construye una sola vez
+    wrap.innerHTML = dualCardHtml("prodCpm", "Pelletera CPM", "--amp-cpm") + dualCardHtml("prodKahl", "Pelletera KAHL", "--amp-kahl");
+    prodChartCpm = crearDualChart("prodCpm", "--amp-cpm");
+    prodChartKahl = crearDualChart("prodKahl", "--amp-kahl");
+  }
   const from = Number(a.inicio_ms), to = Date.now();
   try {
     const d = await fetch(`/api/producciones/pelleteras?from=${from}&to=${to}`).then(x => x.json());
     if (!d.ok) return;
-    prodAmpCpm.setData(d.cpm || [], { t0: from, t1: to });
-    prodAmpKahl.setData(d.kahl || [], { t0: from, t1: to });
-    ampStats("prodAmpCpm", d.stats && d.stats.CPM, d.cpm);
-    ampStats("prodAmpKahl", d.stats && d.stats.KAHL, d.kahl);
+    pintarDual(prodChartCpm, "prodCpm", d.cpm, from, to);
+    pintarDual(prodChartKahl, "prodKahl", d.kahl, from, to);
   } catch (_) {}
 }
 
@@ -1451,21 +1517,9 @@ function detalleCompletoHtml(r) {
   ].filter(Boolean).join(" · ");
   const muted = "font-weight:600;text-transform:none;letter-spacing:0;color:var(--ink-muted)";
   // Solo para producciones PELLET: gráfica de amperaje de las pelleteras CPM y KAHL.
-  const ampSection = (String(r.tipo).toUpperCase() === "PELLET") ? `
-    <div class="section-title" style="margin-top:16px">Amperaje pelletera CPM</div>
-    <div class="chart-card">
-      <div class="top"><div class="name"><span class="swatch" style="background:var(--amp-cpm)"></span>CPM</div>
-        <div class="now tnum"><span id="dtAmpCpmNow">—</span><small> A</small></div></div>
-      <div class="chart-wrap"><canvas id="dtAmpCpmCanvas"></canvas><div class="tooltip" id="dtAmpCpmTip"></div></div>
-      <div class="chart-stats"><span>Mín <b class="tnum" id="dtAmpCpmMin">—</b></span><span>Prom <b class="tnum" id="dtAmpCpmAvg">—</b></span><span>Máx <b class="tnum" id="dtAmpCpmMax">—</b></span></div>
-    </div>
-    <div class="section-title" style="margin-top:16px">Amperaje pelletera KAHL</div>
-    <div class="chart-card">
-      <div class="top"><div class="name"><span class="swatch" style="background:var(--amp-kahl)"></span>KAHL</div>
-        <div class="now tnum"><span id="dtAmpKahlNow">—</span><small> A</small></div></div>
-      <div class="chart-wrap"><canvas id="dtAmpKahlCanvas"></canvas><div class="tooltip" id="dtAmpKahlTip"></div></div>
-      <div class="chart-stats"><span>Mín <b class="tnum" id="dtAmpKahlMin">—</b></span><span>Prom <b class="tnum" id="dtAmpKahlAvg">—</b></span><span>Máx <b class="tnum" id="dtAmpKahlMax">—</b></span></div>
-    </div>` : "";
+  const ampSection = (String(r.tipo).toUpperCase() === "PELLET")
+    ? dualCardHtml("dtCpm", "Pelletera CPM", "--amp-cpm") + dualCardHtml("dtKahl", "Pelletera KAHL", "--amp-kahl")
+    : "";
   return `
     <div class="section-title" style="margin-top:2px">Corriente <span style="${muted}">· del inicio al fin de la producción</span></div>
     <div class="chart-card">
@@ -1507,27 +1561,55 @@ async function abrirDetalle(lote, producto) {
     if (String(r.tipo).toUpperCase() === "PELLET") cargarAmperaje(r);
   } catch (e) { $("#dtBody").innerHTML = `<div style="padding:16px;color:var(--critical)">✗ ${e.message}</div>`; }
 }
-// Vuelca stats (server) + valor actual de una serie de amperaje en sus elementos.
-function ampStats(pre, st, pts) {
-  $(`#${pre}Min`).textContent = st && st.min != null ? fmt(st.min, 0) + " A" : "—";
-  $(`#${pre}Avg`).textContent = st && st.avg != null ? fmt(st.avg, 0) + " A" : "—";
-  $(`#${pre}Max`).textContent = st && st.max != null ? fmt(st.max, 0) + " A" : "—";
-  const last = (pts || []).at(-1);
-  $(`#${pre}Now`).textContent = last ? fmt(last.y, 0) : "—";
+// HTML de una tarjeta de pelletera con doble eje (amperaje izq. + temperatura der.).
+// prefix → ids: {prefix}Canvas/Tip, {prefix}Amp{Now,Min,Avg,Max}, {prefix}Tmp{...}.
+function dualCardHtml(prefix, titulo, ampVar) {
+  const m = "font-weight:600;text-transform:none;letter-spacing:0;color:var(--ink-muted)";
+  return `
+    <div class="section-title" style="margin-top:16px">${titulo} <span style="${m}">· amperaje y temperatura</span></div>
+    <div class="chart-card">
+      <div class="top"><div class="name" style="gap:14px; flex-wrap:wrap">
+        <span><span class="swatch" style="background:var(${ampVar})"></span> Amperaje <b class="tnum" id="${prefix}AmpNow">—</b> A</span>
+        <span><span class="swatch" style="background:var(--temp)"></span> Temp <b class="tnum" id="${prefix}TmpNow">—</b> °C</span>
+      </div></div>
+      <div class="chart-wrap"><canvas id="${prefix}Canvas"></canvas><div class="tooltip" id="${prefix}Tip"></div></div>
+      <div style="margin-top:9px; padding-top:9px; border-top:1px solid var(--border); font-size:12px; color:var(--ink-2); display:flex; flex-direction:column; gap:3px">
+        <span><b style="color:var(${ampVar})">Amperaje</b> · mín <b class="tnum" id="${prefix}AmpMin">—</b> · prom <b class="tnum" id="${prefix}AmpAvg">—</b> · máx <b class="tnum" id="${prefix}AmpMax">—</b> A</span>
+        <span><b style="color:var(--temp)">Temperatura</b> · mín <b class="tnum" id="${prefix}TmpMin">—</b> · prom <b class="tnum" id="${prefix}TmpAvg">—</b> · máx <b class="tnum" id="${prefix}TmpMax">—</b> °C</span>
+      </div>
+    </div>`;
 }
-let dtAmpCpm = null, dtAmpKahl = null;
+function crearDualChart(prefix, ampVar) {
+  return new DualAxisChart($("#" + prefix + "Canvas"), {
+    left: { colorVar: ampVar, unit: "A", dec: 0 },
+    right: { colorVar: "--temp", unit: "°C", dec: 1 },
+    tip: $("#" + prefix + "Tip"),
+  });
+}
+// serie = { amp:[{t,y}], temp:[{t,y}], stats:{ amp:{min,max,avg}, temp:{...} } }
+function pintarDual(chart, prefix, serie, from, to) {
+  if (!chart || !serie) return;
+  chart.setData({ left: serie.amp || [], right: serie.temp || [] }, { t0: from, t1: to });
+  const put = (suf, st, pts, dec) => {
+    $(`#${prefix}${suf}Min`).textContent = st && st.min != null ? fmt(st.min, dec) : "—";
+    $(`#${prefix}${suf}Avg`).textContent = st && st.avg != null ? fmt(st.avg, dec) : "—";
+    $(`#${prefix}${suf}Max`).textContent = st && st.max != null ? fmt(st.max, dec) : "—";
+    const last = (pts || []).at(-1); $(`#${prefix}${suf}Now`).textContent = last ? fmt(last.y, dec) : "—";
+  };
+  put("Amp", serie.stats && serie.stats.amp, serie.amp, 0);
+  put("Tmp", serie.stats && serie.stats.temp, serie.temp, 1);
+}
+let dtChartCpm = null, dtChartKahl = null;
 async function cargarAmperaje(r) {
-  const cc = $("#dtAmpCpmCanvas"), kc = $("#dtAmpKahlCanvas"); if (!cc || !kc) return;
+  const cc = $("#dtCpmCanvas"), kc = $("#dtKahlCanvas"); if (!cc || !kc) return;
   const { from, to } = ventanaLote(r); if (from == null) return;
-  dtAmpCpm = new LineChart(cc, { colorVar: "--amp-cpm", unit: "A", dec: 0, tip: $("#dtAmpCpmTip") });
-  dtAmpKahl = new LineChart(kc, { colorVar: "--amp-kahl", unit: "A", dec: 0, tip: $("#dtAmpKahlTip") });
+  dtChartCpm = crearDualChart("dtCpm", "--amp-cpm");
+  dtChartKahl = crearDualChart("dtKahl", "--amp-kahl");
   try {
     const d = await fetch(`/api/producciones/pelleteras?from=${from}&to=${to}`).then(x => x.json());
     if (!d.ok) return;
-    dtAmpCpm.setData(d.cpm || [], { t0: from, t1: to });
-    dtAmpKahl.setData(d.kahl || [], { t0: from, t1: to });
-    ampStats("dtAmpCpm", d.stats && d.stats.CPM, d.cpm);
-    ampStats("dtAmpKahl", d.stats && d.stats.KAHL, d.kahl);
+    pintarDual(dtChartCpm, "dtCpm", d.cpm, from, to);
+    pintarDual(dtChartKahl, "dtKahl", d.kahl, from, to);
   } catch (_) {}
 }
 // Ventana de la producción para el gráfico: del primer inicio al fin (o ahora si en curso).

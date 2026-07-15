@@ -510,7 +510,7 @@ const server = http.createServer((req, res) => {
       })();
       return;
     }
-    // Amperaje de las pelleteras (CPM/KAHL) en una ventana [from,to] (epoch ms).
+    // Amperaje y temperatura de las pelleteras (CPM/KAHL) en una ventana [from,to] (ms).
     // data_pelleteras tiene ~22M filas y muestrea cada ~2 s → se acota por el índice
     // de fechahora y se AGREGA por buckets en SQL (no se transfieren millones de filas):
     //   ~600 puntos por serie, independiente del largo de la producción.
@@ -526,26 +526,28 @@ const server = http.createServer((req, res) => {
           await cli.connect();
           const fromS = Math.floor(from / 1000), toS = Math.floor(to / 1000);
           const bucket = Math.max(2, Math.ceil((toS - fromS) / 600)); // ~600 puntos/serie
-          const cond = `tipo='AMPERAJE' AND subtipo IN ('CPM','KAHL')
+          const cond = `tipo IN ('AMPERAJE','TEMPERATURA') AND subtipo IN ('CPM','KAHL')
              AND fechahora >= FROM_UNIXTIME(${fromS}) AND fechahora <= FROM_UNIXTIME(${toS})`;
           const rows = (await cli.query(
-            `SELECT subtipo, FLOOR(UNIX_TIMESTAMP(fechahora)/${bucket})*${bucket} AS b, AVG(valor) AS v
+            `SELECT tipo, subtipo, FLOOR(UNIX_TIMESTAMP(fechahora)/${bucket})*${bucket} AS b, AVG(valor) AS v
              FROM segra_fabrica.data_pelleteras
              WHERE ${cond}
-             GROUP BY subtipo, FLOOR(UNIX_TIMESTAMP(fechahora)/${bucket}) ORDER BY b`
+             GROUP BY tipo, subtipo, FLOOR(UNIX_TIMESTAMP(fechahora)/${bucket}) ORDER BY b`
           )).rows;
-          const cpm = [], kahl = [];
+          const out = { cpm: { amp: [], temp: [], stats: {} }, kahl: { amp: [], temp: [], stats: {} } };
           for (const r of rows) {
-            const pt = { t: Number(r.b) * 1000, y: Number(r.v) };
-            (r.subtipo === 'CPM' ? cpm : kahl).push(pt);
+            const pel = r.subtipo === 'CPM' ? out.cpm : out.kahl;
+            (r.tipo === 'AMPERAJE' ? pel.amp : pel.temp).push({ t: Number(r.b) * 1000, y: Number(r.v) });
           }
           const stRows = (await cli.query(
-            `SELECT subtipo, MIN(valor) mn, MAX(valor) mx, AVG(valor) av
-             FROM segra_fabrica.data_pelleteras WHERE ${cond} GROUP BY subtipo`
+            `SELECT tipo, subtipo, MIN(valor) mn, MAX(valor) mx, AVG(valor) av
+             FROM segra_fabrica.data_pelleteras WHERE ${cond} GROUP BY tipo, subtipo`
           )).rows;
-          const stats = {};
-          for (const s of stRows) stats[s.subtipo] = { min: Number(s.mn), max: Number(s.mx), avg: Number(s.av) };
-          json(res, 200, { ok: true, bucket, cpm, kahl, stats });
+          for (const s of stRows) {
+            const pel = s.subtipo === 'CPM' ? out.cpm : out.kahl;
+            pel.stats[s.tipo === 'AMPERAJE' ? 'amp' : 'temp'] = { min: Number(s.mn), max: Number(s.mx), avg: Number(s.av) };
+          }
+          json(res, 200, { ok: true, bucket, cpm: out.cpm, kahl: out.kahl });
         } catch (e) {
           json(res, 200, { ok: false, error: e.message });
         } finally { cli.close(); }
