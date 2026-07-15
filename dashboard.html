@@ -380,6 +380,8 @@
         <div class="ptile"><div class="label">Batches programados</div><div class="val tnum" id="prodProg">—</div></div>
         <div class="ptile" style="--hero:var(--good)"><div class="label">Energía consumida</div><div class="val tnum"><span id="prodKwh">—</span><small> kWh</small></div></div>
         <div class="ptile"><div class="label">Costo energía</div><div class="val tnum" style="color:var(--series-fp)" id="prodCosto">—</div></div>
+        <div class="ptile"><div class="label">Kg producidos (parcial)</div><div class="val tnum"><span id="prodKg">—</span><small> kg</small></div></div>
+        <div class="ptile"><div class="label">$/kg (parcial)</div><div class="val tnum" style="color:var(--brand-b)" id="prodPerKg">—</div></div>
       </div>
       <div style="margin-top:18px">
         <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--ink-2); margin-bottom:6px">
@@ -1157,6 +1159,13 @@ function renderProdActual(a) {
   const kwh = numOrDash(a.kwh);
   $("#prodKwh").textContent = kwh != null ? fmt(kwh, 2) : "—";
   $("#prodCosto").textContent = costoEnergia(kwh);
+  // Parcial en curso: kg producidos = batches producidos × kg_batch; $/kg sobre esos kg.
+  const kgBatch = numOrDash(a.kg_batch);
+  const kgProd = (prod != null && kgBatch != null) ? prod * kgBatch : null;
+  $("#prodKg").textContent = kgProd != null ? fmt(kgProd, 0) : "—";
+  const costoNum = (kwh != null && cfg.kwhValue > 0) ? kwh * cfg.kwhValue : null;
+  const perKg = (costoNum != null && kgProd > 0) ? costoNum / kgProd : null;
+  $("#prodPerKg").textContent = perKg != null ? `${cfg.currency}${fmt(perKg, perKg < 100 ? 2 : 0)}` : "—";
 }
 // Costo en $ de una energía (kWh) según el valor $/kWh configurado.
 function costoEnergia(kwh) {
@@ -1172,8 +1181,9 @@ function costoPorKg(kwh, kg, terminada) {
 }
 // Línea de meta del lote: cliente · tipo · formato · kg · cód producto.
 function prodMetaLinea(o) {
-  const kg = numOrDash(o.kg);
+  const kg = numOrDash(o.kg), kgBatch = numOrDash(o.kg_batch);
   return [o.cliente, o.tipo, o.formato, kg != null ? fmt(kg, 0) + " kg" : null,
+          kgBatch != null ? "batch " + fmt(kgBatch, 0) + " kg" : null,
           o.cod_producto != null ? "cód " + o.cod_producto : null].filter(Boolean).join(" · ");
 }
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }

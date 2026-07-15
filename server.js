@@ -359,7 +359,7 @@ const server = http.createServer((req, res) => {
           if (lotes.length) {
             const prog = (await cli.query(
               `SELECT pg.lote, pr.nombre AS producto, pg.cod_producto, pg.cliente,
-                      pg.kg_produccion AS kg, pg.tipo, pg.formato
+                      pg.kg_produccion AS kg, pg.kg_batch, pg.tipo, pg.formato
                FROM segra.programacion pg
                LEFT JOIN segra.productos pr ON pr.id = pg.cod_producto
                WHERE pg.lote IN (${lotes.join(',')})`
@@ -368,7 +368,7 @@ const server = http.createServer((req, res) => {
           }
           const attachProg = (obj) => {
             const p = obj && progPorLote[String(obj.lote)];
-            if (p) { obj.producto = p.producto; obj.cod_producto = p.cod_producto; obj.cliente = p.cliente; obj.kg = p.kg; obj.tipo = p.tipo; obj.formato = p.formato; }
+            if (p) { obj.producto = p.producto; obj.cod_producto = p.cod_producto; obj.cliente = p.cliente; obj.kg = p.kg; obj.kg_batch = p.kg_batch; obj.tipo = p.tipo; obj.formato = p.formato; }
           };
 
           const runningLote = (actual && String(actual.en_marcha) === '1') ? String(actual.lote) : null;
