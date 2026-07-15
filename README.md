@@ -106,6 +106,7 @@ Segra/
 ├── config.json         Ajustes (valor $/kWh)
 ├── fabrica-db.js       Cliente MySQL/MariaDB puro-JS (fuente de producción, solo lectura)
 ├── db.config.json      Credenciales de la BD MariaDB (no versionado)
+├── energia.db          Energía consolidada por lote (generada; no versionada)
 ├── package.json        Scripts y metadatos
 ├── pfw03.db            Base de datos SQLite (generada; no versionada)
 ├── tools/              Utilidades de diagnóstico / puesta a punto
@@ -168,6 +169,7 @@ comprimido.
 | `GET /api/config` · `POST` | Ajustes (valor $/kWh) |
 | `GET /api/health` | Estado de la base |
 | `GET /api/fabrica/ping` | Prueba de la fuente MariaDB de producción (estado + última muestra) |
+| `GET /api/producciones?limit=N` | Producción en curso + últimas N (lote, inicio/fin, batches y **energía kWh**) |
 
 ---
 

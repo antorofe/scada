@@ -117,6 +117,42 @@ function energy(fromMs, toMs) {
   return { kwh, samples: n, durationMs: r.mx - r.mn, avgKw, from: r.mn, to: r.mx };
 }
 
+// ---- Energía por lote de producción (almacén escribible propio) ----
+// pfw03.db se abre en solo-lectura; la energía consolidada de cada producción
+// terminada se persiste aquí para no recalcularla en cada consulta. Las producciones
+// terminadas no cambian, así que el valor guardado es estable (y la retención del
+// logger conserva la energía, por lo que seguiría siendo recalculable si hiciera falta).
+const ENERGIA_DB = pathm.join(__dirname, 'energia.db');
+let edb = null;
+function getEnergiaDb() {
+  if (edb) return edb;
+  try {
+    edb = new DatabaseSync(ENERGIA_DB);
+    edb.exec(`CREATE TABLE IF NOT EXISTS lote_energia (
+      lote INTEGER PRIMARY KEY, inicio_ms INTEGER, fin_ms INTEGER,
+      kwh REAL, avg_kw REAL, samples INTEGER, saved_at INTEGER
+    )`);
+  } catch (_) { edb = null; }
+  return edb;
+}
+// Devuelve la energía de un lote TERMINADO, usando el valor guardado si la ventana
+// coincide; si no, la calcula sobre pfw03.db y la guarda.
+function energiaLoteGuardada(lote, fromMs, toMs) {
+  const e = getEnergiaDb();
+  if (e) {
+    const row = e.prepare('SELECT * FROM lote_energia WHERE lote = ?').get(lote);
+    if (row && row.inicio_ms === fromMs && row.fin_ms === toMs) return { kwh: row.kwh, avgKw: row.avg_kw };
+  }
+  const en = energy(fromMs, toMs);
+  if (e && en && en.samples > 0) {
+    try {
+      e.prepare('INSERT OR REPLACE INTO lote_energia (lote,inicio_ms,fin_ms,kwh,avg_kw,samples,saved_at) VALUES (?,?,?,?,?,?,?)')
+        .run(lote, fromMs, toMs, en.kwh, en.avgKw, en.samples, Date.now());
+    } catch (_) {}
+  }
+  return { kwh: en ? en.kwh : 0, avgKw: en ? en.avgKw : 0 };
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   try {
@@ -235,10 +271,17 @@ const server = http.createServer((req, res) => {
           const serverNow = (await cli.query('SELECT NOW() AS now')).rows[0].now;
           // Últimas N producciones: 1 fila por lote (con evento de inicio), agregando
           // primer inicio, último fin y batches (programados / producidos).
+          // inicio_ms/fin_ms: epoch (ms) calculado por MariaDB con UNIX_TIMESTAMP para
+          // correlacionar con pfw03.db, que guarda epoch UTC (los relojes están en husos
+          // distintos: la BD en hora local, la caja SCADA en UTC). last_ms = último evento
+          // del lote (respaldo de fin cuando no hay evento explícito valor=0).
           const lista = (await cli.query(
             `SELECT lote,
                 MIN(CASE WHEN variable='PRODUCCION_INICIADA' AND valor='1' THEN fecha END) AS inicio,
                 MAX(CASE WHEN variable='PRODUCCION_INICIADA' AND valor='0' THEN fecha END) AS fin,
+                UNIX_TIMESTAMP(MIN(CASE WHEN variable='PRODUCCION_INICIADA' AND valor='1' THEN fecha END))*1000 AS inicio_ms,
+                UNIX_TIMESTAMP(MAX(CASE WHEN variable='PRODUCCION_INICIADA' AND valor='0' THEN fecha END))*1000 AS fin_ms,
+                UNIX_TIMESTAMP(MAX(fecha))*1000 AS last_ms,
                 MAX(CASE WHEN variable='BATCH_PROGRAMADOS' THEN CAST(valor AS UNSIGNED) END) AS programados,
                 MAX(CASE WHEN variable='BATCH_PRODUCIDOS' THEN CAST(valor AS UNSIGNED) END) AS producidos
              FROM segra_fabrica.data_ciclado
@@ -264,9 +307,28 @@ const server = http.createServer((req, res) => {
                  (SELECT valor FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' ORDER BY id DESC LIMIT 1) AS en_marcha,
                  (SELECT fecha FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' AND valor='1' ORDER BY id DESC LIMIT 1) AS inicio,
                  (SELECT fecha FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' AND valor='0' ORDER BY id DESC LIMIT 1) AS fin,
+                 (SELECT UNIX_TIMESTAMP(MIN(fecha))*1000 FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' AND valor='1') AS inicio_ms,
                  (SELECT CAST(valor AS UNSIGNED) FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='BATCH_PROGRAMADOS' ORDER BY id DESC LIMIT 1) AS programados,
                  (SELECT CAST(valor AS UNSIGNED) FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='BATCH_PRODUCIDOS' ORDER BY id DESC LIMIT 1) AS producidos`
             )).rows[0] || null;
+          }
+
+          // Energía por lote (kWh). La producción en curso se calcula en vivo hasta ahora
+          // (no se persiste); las terminadas usan el valor guardado (o se calcula y guarda).
+          const runningLote = (actual && String(actual.en_marcha) === '1') ? String(actual.lote) : null;
+          for (const row of lista) {
+            const from = row.inicio_ms != null ? Number(row.inicio_ms) : null;
+            if (!from) { row.kwh = null; continue; }
+            if (String(row.lote) === runningLote) {
+              row.kwh = energy(from, Date.now()).kwh;              // en curso → hasta ahora
+            } else {
+              const to = row.fin_ms != null ? Number(row.fin_ms) : (row.last_ms != null ? Number(row.last_ms) : null);
+              row.kwh = to ? energiaLoteGuardada(Number(row.lote), from, to).kwh : null;
+            }
+          }
+          if (actual) {
+            const from = actual.inicio_ms != null ? Number(actual.inicio_ms) : null;
+            actual.kwh = from ? energy(from, Date.now()).kwh : null;
           }
           json(res, 200, { ok: true, serverNow, actual, lista });
         } catch (e) {

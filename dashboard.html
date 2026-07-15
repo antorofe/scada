@@ -376,6 +376,8 @@
         <div class="ptile"><div class="label">Transcurrido</div><div class="val tnum" id="prodDur">—</div></div>
         <div class="ptile"><div class="label">Batches producidos</div><div class="val tnum" id="prodProd">—</div></div>
         <div class="ptile"><div class="label">Batches programados</div><div class="val tnum" id="prodProg">—</div></div>
+        <div class="ptile" style="--hero:var(--good)"><div class="label">Energía consumida</div><div class="val tnum"><span id="prodKwh">—</span><small> kWh</small></div></div>
+        <div class="ptile"><div class="label">Costo energía</div><div class="val tnum" style="color:var(--series-fp)" id="prodCosto">—</div></div>
       </div>
       <div style="margin-top:18px">
         <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--ink-2); margin-bottom:6px">
@@ -391,10 +393,10 @@
     <div style="overflow-x:auto">
       <table class="prodtable" id="prodTable">
         <thead>
-          <tr><th>Lote</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Batches</th><th>Estado</th></tr>
+          <tr><th>Lote</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Batches</th><th>Energía</th><th>Costo</th><th>Estado</th></tr>
         </thead>
         <tbody id="prodTbody">
-          <tr><td colspan="6" style="text-align:center; color:var(--ink-2); padding:20px">Cargando…</td></tr>
+          <tr><td colspan="8" style="text-align:center; color:var(--ink-2); padding:20px">Cargando…</td></tr>
         </tbody>
       </table>
     </div>
@@ -1123,7 +1125,7 @@ async function cargarProducciones() {
     renderProdActual(r.actual);
     renderProdLista(r.lista || [], r.actual);
   } catch (e) {
-    $("#prodTbody").innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
+    $("#prodTbody").innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
   }
 }
 
@@ -1147,10 +1149,19 @@ function renderProdActual(a) {
   const pct = (prog && prog > 0 && prod != null) ? Math.min(100, Math.round(prod / prog * 100)) : null;
   $("#prodPct").textContent = pct != null ? pct + "%" : "—";
   $("#prodFill").style.width = (pct != null ? pct : 0) + "%";
+  // Energía consumida (kWh) y costo ($), en vivo desde el inicio de la producción
+  const kwh = numOrDash(a.kwh);
+  $("#prodKwh").textContent = kwh != null ? fmt(kwh, 2) : "—";
+  $("#prodCosto").textContent = costoEnergia(kwh);
+}
+// Costo en $ de una energía (kWh) según el valor $/kWh configurado.
+function costoEnergia(kwh) {
+  if (kwh == null || !(cfg.kwhValue > 0)) return "—";
+  return `${cfg.currency}${fmt(kwh * cfg.kwhValue, 0)}`;
 }
 
 function renderProdLista(lista, actual) {
-  if (!lista.length) { $("#prodTbody").innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--ink-2); padding:20px">Sin producciones.</td></tr>`; return; }
+  if (!lista.length) { $("#prodTbody").innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--ink-2); padding:20px">Sin producciones.</td></tr>`; return; }
   const enCursoLote = (actual && String(actual.en_marcha) === "1") ? String(actual.lote) : null;
   $("#prodTbody").innerHTML = lista.map(r => {
     const enCurso = String(r.lote) === enCursoLote;
@@ -1160,12 +1171,15 @@ function renderProdLista(lista, actual) {
       ? '<span class="badge run"><span class="led" style="width:7px;height:7px;border-radius:50%;background:var(--good)"></span>En marcha</span>'
       : '<span class="badge done">Finalizada</span>';
     const fin = enCurso ? "—" : fmtFechaHora(r.fin);
+    const kwh = numOrDash(r.kwh);
     return `<tr class="${enCurso ? "curr" : ""}">
       <td class="tnum"><b>${r.lote}</b></td>
       <td class="tnum">${fmtFechaHora(r.inicio)}</td>
       <td class="tnum">${fin}</td>
       <td class="tnum">${fmtDuracion(r.inicio, enCurso ? prodServerNow : r.fin)}</td>
       <td class="tnum">${batches}</td>
+      <td class="tnum">${kwh != null ? fmt(kwh, 2) + " kWh" : "—"}</td>
+      <td class="tnum">${costoEnergia(kwh)}</td>
       <td>${estado}</td>
     </tr>`;
   }).join("");

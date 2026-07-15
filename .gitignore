@@ -2,6 +2,9 @@
 pfw03.db
 pfw03.db-shm
 pfw03.db-wal
+energia.db
+energia.db-shm
+energia.db-wal
 
 # Logs de ejecución
 *.out
