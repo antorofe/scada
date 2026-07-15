@@ -65,7 +65,7 @@ function latest() {
 function history(fromMs, toMs) {
   const d = getDb(); if (!d) return [];
   let rows = d.prepare(
-    'SELECT ts_unix_ms AS t, i, p, fp FROM readings WHERE ts_unix_ms >= ? AND ts_unix_ms <= ? AND ok = 1 ORDER BY ts_unix_ms'
+    'SELECT ts_unix_ms AS t, i, p, fp, thdi FROM readings WHERE ts_unix_ms >= ? AND ts_unix_ms <= ? AND ok = 1 ORDER BY ts_unix_ms'
   ).all(fromMs, toMs);
   // Diezmado si hay demasiados puntos (mantiene ~1200 máx para la gráfica)
   const MAX = 1200;

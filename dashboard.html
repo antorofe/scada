@@ -158,6 +158,9 @@
   .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; }
   .tile { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 13px 15px;
           display: flex; flex-direction: column; }
+  .tile.has-eye { position: relative; }
+  .tile-eye { position: absolute; top: 8px; right: 9px; border: 0; background: transparent; cursor: pointer; font-size: 15px; opacity: .4; line-height: 1; padding: 2px; }
+  .tile-eye:hover { opacity: 1; transform: scale(1.12); }
   .tile .label { font-size: 12px; color: var(--ink-2); font-weight: 600; }
   .tile .val { font-size: 25px; font-weight: 700; margin-top: 6px; letter-spacing: -.5px; }
   .tile .val small { font-size: 12.5px; font-weight: 600; color: var(--ink-2); margin-left: 3px; }
@@ -509,6 +512,24 @@
   </div>
 </div>
 
+<!-- Modal: THD Corriente en el tiempo -->
+<div class="modal-overlay" id="thdModal" hidden>
+  <div class="modal-card" style="max-width:840px">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">THD Corriente — <span id="thdRango">—</span></div>
+        <div class="modal-sub" id="thdSub">—</div>
+      </div>
+      <button class="modal-close" id="thdClose" title="Cerrar">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="chart-card">
+        <div class="chart-wrap" style="height:320px"><canvas id="thdCanvas"></canvas><div class="tooltip" id="thdTip"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <main id="mysqlView" hidden>
   <div class="section-title">MySQL — Base de datos de producción</div>
   <div class="card">
@@ -704,12 +725,14 @@ class LineChart {
     this.pts = []; this.windowMs = opts.windowMs || 5 * 60000;
     this.hover = null; this.tip = opts.tip;
     this.markers = []; this.showMarkers = true;   // líneas verticales de batch
+    this.hlines = [];                              // líneas horizontales de referencia (mín/prom/máx)
     new ResizeObserver(() => this.render()).observe(canvas.parentElement);
     canvas.addEventListener("mousemove", (e) => this.onMove(e));
     canvas.addEventListener("mouseleave", () => { this.hover = null; if (this.tip) this.tip.style.display = "none"; this.render(); });
   }
   setData(arr, range) { this.pts = arr.map(p => ({ t: p.t, y: this.scale(p.y) })); this.xRange = range || null; this.render(); }
   setMarkers(m) { this.markers = m || []; this.render(); }   // m: [{n, ms}]
+  setHLines(h) { this.hlines = h || []; this.render(); }      // h: [{y, color, label}]
   cloneInto(canvas, tip) {   // re-dibuja los mismos datos en otro canvas (para ampliar)
     const c = new LineChart(canvas, { colorVar: this.colorVar, unit: this.unit, dec: this.dec, tip });
     c.pts = this.pts.slice(); c.xRange = this.xRange;
@@ -753,6 +776,7 @@ class LineChart {
     // Rango Y
     let lo = Infinity, hi = -Infinity;
     for (const p of pts) { if (p.y < lo) lo = p.y; if (p.y > hi) hi = p.y; }
+    for (const hl of (this.hlines || [])) { if (hl.y != null) { if (hl.y < lo) lo = hl.y; if (hl.y > hi) hi = hl.y; } }
     if (!isFinite(lo)) { lo = 0; hi = 1; }
     if (hi - lo < 1e-6) { hi += 1; lo -= 1; }
     const pad = (hi - lo) * 0.15; lo -= pad; hi += pad;
@@ -789,6 +813,19 @@ class LineChart {
         ctx.setLineDash([]); ctx.globalAlpha = 1;
         ctx.fillStyle = green; ctx.textAlign = "center"; ctx.textBaseline = "top";
         ctx.fillText(mk.n, mx, P.t);
+      }
+      ctx.restore();
+    }
+    // Líneas horizontales de referencia (mín / prom / máx)
+    if (this.hlines && this.hlines.length) {
+      ctx.save(); ctx.font = "bold 10px system-ui, sans-serif";
+      for (const hl of this.hlines) {
+        if (hl.y == null || hl.y < lo || hl.y > hi) continue;
+        const py = Y(hl.y);
+        ctx.strokeStyle = hl.color; ctx.globalAlpha = 0.9; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+        ctx.beginPath(); ctx.moveTo(P.l, py); ctx.lineTo(w - P.r, py); ctx.stroke();
+        ctx.setLineDash([]); ctx.globalAlpha = 1;
+        if (hl.label) { ctx.fillStyle = hl.color; ctx.textAlign = "right"; ctx.textBaseline = "bottom"; ctx.fillText(hl.label, w - P.r - 3, py - 2); }
       }
       ctx.restore();
     }
@@ -953,7 +990,7 @@ const ELEC = [
   { key: "cosphi", label: "Cosφ", unit: "", dec: 3 },
   { key: "freq", label: "Frecuencia", unit: "Hz", dec: 2, status: (v) => v >= 49.5 && v <= 50.5 ? ["good","Estable"] : ["warn","Desviada"] },
   { key: "thdv", label: "THD Tensión", unit: "%", dec: 2, status: (v) => v < 5 ? ["good","Bajo"] : v < 8 ? ["warn","Elevado"] : ["serious","Alto"] },
-  { key: "thdi", label: "THD Corriente", unit: "%", dec: 2, status: (v) => v < 8 ? ["good","Bajo"] : v < 15 ? ["warn","Elevado"] : ["serious","Alto"] },
+  { key: "thdi", label: "THD Corriente", unit: "%", dec: 2, detail: true, status: (v) => v < 8 ? ["good","Bajo"] : v < 15 ? ["warn","Elevado"] : ["serious","Alto"] },
 ];
 const ENERGY = [
   { key: "kwh", label: "Energía activa", unit: "kWh", dec: 2 },
@@ -973,7 +1010,9 @@ function buildTiles(container, defs, stats = 0, pfx = "") {
     const cell = (lb, id) => stats === 3
       ? `<span><em>${lb}</em><b class="tnum" id="${pfx}${id}-${d.key}">—</b></span>`
       : `<span>${lb} <b class="tnum" id="${pfx}${id}-${d.key}">—</b></span>`;
+    if (d.detail && pfx === "") el.classList.add("has-eye");
     el.innerHTML = `<div class="label">${d.label}</div>
+      ${(d.detail && pfx === "") ? `<button class="tile-eye" data-detail="${d.key}" title="Ver ${d.label} en el tiempo">👁</button>` : ""}
       <div class="val tnum"><span id="${pfx}tv-${d.key}">—</span><small>${d.unit}</small></div>
       <div id="${pfx}ts-${d.key}"></div>` + (stats ? `
       <div class="mm${stats === 3 ? " mm3" : ""}">
@@ -1820,7 +1859,42 @@ document.addEventListener("change", (e) => {
 });
 $("#zoomClose").addEventListener("click", cerrarZoom);
 $("#zoomModal").addEventListener("click", (e) => { if (e.target === $("#zoomModal")) cerrarZoom(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { cerrarZoom(); cerrarDetalle(); } });
+
+/* ---------- Modal: THD Corriente en el tiempo ---------- */
+let thdChart = null, thdTimer = null;
+function rangoActivo() {   // minutos del rango seleccionado arriba
+  const b = document.querySelector("#ranges button.active");
+  return b ? parseInt(b.dataset.min, 10) : (typeof windowMin !== "undefined" ? windowMin : 30);
+}
+function rangoLabel(min) { return min < 60 ? `últimos ${min} min` : (min === 60 ? "última hora" : `últimas ${min / 60} h`); }
+async function refrescarThd() {
+  if (!thdChart) thdChart = new LineChart($("#thdCanvas"), { colorVar: "--serious", unit: "%", dec: 2, tip: $("#thdTip") });
+  const min = rangoActivo();
+  $("#thdRango").textContent = rangoLabel(min);
+  try {
+    const [h, m] = await Promise.all([
+      fetch(`/api/history?minutes=${min}`).then(x => x.json()),
+      fetch(`/api/minmax?minutes=${min}`).then(x => x.json()),
+    ]);
+    const pts = (h.points || []).map(p => ({ t: p.t, y: p.thdi })).filter(p => p.y != null);
+    thdChart.setData(pts, { t0: h.from, t1: h.to });
+    const mn = m.thdi_min, av = m.thdi_avg, mx = m.thdi_max;
+    thdChart.setHLines([
+      mx != null ? { y: mx, color: cssVar("--critical"), label: `Máx ${fmt(mx, 2)}%` } : null,
+      av != null ? { y: av, color: cssVar("--series-p"), label: `Prom ${fmt(av, 2)}%` } : null,
+      mn != null ? { y: mn, color: cssVar("--good"), label: `Mín ${fmt(mn, 2)}%` } : null,
+    ].filter(Boolean));
+    $("#thdSub").innerHTML = `Mín <b class="tnum">${mn != null ? fmt(mn, 2) : "—"}%</b> · Prom <b class="tnum">${av != null ? fmt(av, 2) : "—"}%</b> · Máx <b class="tnum">${mx != null ? fmt(mx, 2) : "—"}%</b>`;
+  } catch (_) {}
+}
+function abrirThd() { $("#thdModal").hidden = false; refrescarThd(); if (thdTimer) clearInterval(thdTimer); thdTimer = setInterval(refrescarThd, 5000); }
+function cerrarThd() { $("#thdModal").hidden = true; if (thdTimer) { clearInterval(thdTimer); thdTimer = null; } }
+$("#thdClose").addEventListener("click", cerrarThd);
+$("#thdModal").addEventListener("click", (e) => { if (e.target === $("#thdModal")) cerrarThd(); });
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".tile-eye"); if (b && b.dataset.detail === "thdi") abrirThd();
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { cerrarZoom(); cerrarDetalle(); cerrarThd(); } });
 
 /* ---------- MySQL: prueba de conexión a la BD de producción ---------- */
 async function probarMysql() {
