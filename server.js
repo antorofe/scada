@@ -135,22 +135,47 @@ function getEnergiaDb() {
   } catch (_) { edb = null; }
   return edb;
 }
-// Devuelve la energía de un lote TERMINADO, usando el valor guardado si la ventana
-// coincide; si no, la calcula sobre pfw03.db y la guarda.
-function energiaLoteGuardada(lote, fromMs, toMs) {
+// Construye los TRAMOS ACTIVOS de un lote a partir de sus eventos PRODUCCION_INICIADA
+// (ordenados): cada '1' abre un tramo y el siguiente '0' lo cierra (los '1' repetidos
+// se ignoran, la producción sigue activa). Si queda un tramo abierto, se cierra en
+// 'cierreMs' (ahora, para la producción en curso; el último evento, para las terminadas).
+// Así se excluye la energía consumida durante las pausas.
+function tramosActivos(eventos, cierreMs) {
+  const tramos = [];
+  let abierto = null;
+  for (const ev of eventos) {
+    if (String(ev.valor) === '1') { if (abierto == null) abierto = Number(ev.ms); }
+    else { if (abierto != null) { tramos.push([abierto, Number(ev.ms)]); abierto = null; } }
+  }
+  if (abierto != null && cierreMs != null) tramos.push([abierto, cierreMs]);
+  return tramos;
+}
+// Suma la energía del PFW03 sobre una lista de tramos [from,to] (kWh).
+function energiaTramos(tramos) {
+  let kwh = 0, samples = 0;
+  for (const [from, to] of tramos) {
+    if (from == null || to == null || to <= from) continue;
+    const e = energy(from, to);
+    if (e) { kwh += e.kwh; samples += e.samples; }
+  }
+  return { kwh, samples };
+}
+// Energía activa de un lote TERMINADO: usa el valor guardado si la firma (último
+// evento) coincide; si no, la calcula sumando tramos y la guarda.
+function energiaLoteActivaGuardada(lote, tramos, firmaMs) {
   const e = getEnergiaDb();
   if (e) {
     const row = e.prepare('SELECT * FROM lote_energia WHERE lote = ?').get(lote);
-    if (row && row.inicio_ms === fromMs && row.fin_ms === toMs) return { kwh: row.kwh, avgKw: row.avg_kw };
+    if (row && row.fin_ms === firmaMs) return row.kwh;
   }
-  const en = energy(fromMs, toMs);
-  if (e && en && en.samples > 0) {
+  const { kwh, samples } = energiaTramos(tramos);
+  if (e && samples > 0) {
     try {
       e.prepare('INSERT OR REPLACE INTO lote_energia (lote,inicio_ms,fin_ms,kwh,avg_kw,samples,saved_at) VALUES (?,?,?,?,?,?,?)')
-        .run(lote, fromMs, toMs, en.kwh, en.avgKw, en.samples, Date.now());
+        .run(lote, tramos.length ? tramos[0][0] : null, firmaMs, kwh, 0, samples, Date.now());
     } catch (_) {}
   }
-  return { kwh: en ? en.kwh : 0, avgKw: en ? en.avgKw : 0 };
+  return kwh;
 }
 
 const server = http.createServer((req, res) => {
@@ -313,22 +338,37 @@ const server = http.createServer((req, res) => {
             )).rows[0] || null;
           }
 
-          // Energía por lote (kWh). La producción en curso se calcula en vivo hasta ahora
-          // (no se persiste); las terminadas usan el valor guardado (o se calcula y guarda).
+          // Energía por lote (kWh) SOLO de los tramos activos (se excluyen las pausas).
+          // Se traen todos los eventos PRODUCCION_INICIADA de los lotes listados en una
+          // sola consulta y se arman los tramos por lote.
+          const lotes = lista.map(r => Number(r.lote)).filter(n => !isNaN(n));
+          const eventosPorLote = {};
+          if (lotes.length) {
+            const evs = (await cli.query(
+              `SELECT lote, valor, UNIX_TIMESTAMP(fecha)*1000 AS ms
+               FROM segra_fabrica.data_ciclado
+               WHERE variable='PRODUCCION_INICIADA' AND lote IN (${lotes.join(',')})
+               ORDER BY lote, id`
+            )).rows;
+            for (const ev of evs) (eventosPorLote[String(ev.lote)] ||= []).push(ev);
+          }
           const runningLote = (actual && String(actual.en_marcha) === '1') ? String(actual.lote) : null;
+          const ahora = Date.now();
           for (const row of lista) {
-            const from = row.inicio_ms != null ? Number(row.inicio_ms) : null;
-            if (!from) { row.kwh = null; continue; }
-            if (String(row.lote) === runningLote) {
-              row.kwh = energy(from, Date.now()).kwh;              // en curso → hasta ahora
+            const evs = eventosPorLote[String(row.lote)] || [];
+            const enCurso = String(row.lote) === runningLote;
+            const cierre = enCurso ? ahora : (row.last_ms != null ? Number(row.last_ms) : null);
+            const tramos = tramosActivos(evs, cierre);
+            if (enCurso) {
+              row.kwh = energiaTramos(tramos).kwh;                 // en curso → tramos hasta ahora
             } else {
-              const to = row.fin_ms != null ? Number(row.fin_ms) : (row.last_ms != null ? Number(row.last_ms) : null);
-              row.kwh = to ? energiaLoteGuardada(Number(row.lote), from, to).kwh : null;
+              const firma = row.last_ms != null ? Number(row.last_ms) : null;
+              row.kwh = tramos.length ? energiaLoteActivaGuardada(Number(row.lote), tramos, firma) : null;
             }
           }
           if (actual) {
-            const from = actual.inicio_ms != null ? Number(actual.inicio_ms) : null;
-            actual.kwh = from ? energy(from, Date.now()).kwh : null;
+            const evs = eventosPorLote[String(actual.lote)] || [];
+            actual.kwh = evs.length ? energiaTramos(tramosActivos(evs, ahora)).kwh : null;
           }
           json(res, 200, { ok: true, serverNow, actual, lista });
         } catch (e) {
