@@ -221,6 +221,60 @@ const server = http.createServer((req, res) => {
       })();
       return;
     }
+    // Producciones (tabla segra_fabrica.data_ciclado): producción en curso + últimas N.
+    // La tabla es de eventos clave-valor por lote (variable/valor). 'valor' es texto,
+    // así que se castea a entero para los conteos de batch. Solo lectura.
+    if (url.pathname === '/api/producciones') {
+      const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '20', 10)));
+      (async () => {
+        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        try {
+          await cli.connect();
+          // Hora del propio servidor de BD: el cliente calcula el "transcurrido" contra
+          // esta referencia (no contra el reloj del navegador, que puede diferir).
+          const serverNow = (await cli.query('SELECT NOW() AS now')).rows[0].now;
+          // Últimas N producciones: 1 fila por lote (con evento de inicio), agregando
+          // primer inicio, último fin y batches (programados / producidos).
+          const lista = (await cli.query(
+            `SELECT lote,
+                MIN(CASE WHEN variable='PRODUCCION_INICIADA' AND valor='1' THEN fecha END) AS inicio,
+                MAX(CASE WHEN variable='PRODUCCION_INICIADA' AND valor='0' THEN fecha END) AS fin,
+                MAX(CASE WHEN variable='BATCH_PROGRAMADOS' THEN CAST(valor AS UNSIGNED) END) AS programados,
+                MAX(CASE WHEN variable='BATCH_PRODUCIDOS' THEN CAST(valor AS UNSIGNED) END) AS producidos
+             FROM segra_fabrica.data_ciclado
+             WHERE lote IN (
+               SELECT lote FROM (
+                 SELECT lote FROM segra_fabrica.data_ciclado
+                 WHERE variable='PRODUCCION_INICIADA'
+                 GROUP BY lote ORDER BY MAX(id) DESC LIMIT ${limit}
+               ) t
+             )
+             GROUP BY lote ORDER BY inicio DESC`
+          )).rows;
+          // Producción en curso = último lote con PRODUCCION_INICIADA=1.
+          const head = (await cli.query(
+            "SELECT lote FROM segra_fabrica.data_ciclado WHERE variable='PRODUCCION_INICIADA' AND valor='1' ORDER BY id DESC LIMIT 1"
+          )).rows[0];
+          let actual = null;
+          if (head) {
+            const lote = parseInt(head.lote, 10); // viene de la propia BD; se fuerza a entero
+            actual = (await cli.query(
+              `SELECT
+                 ${lote} AS lote,
+                 (SELECT valor FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' ORDER BY id DESC LIMIT 1) AS en_marcha,
+                 (SELECT fecha FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' AND valor='1' ORDER BY id DESC LIMIT 1) AS inicio,
+                 (SELECT fecha FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' AND valor='0' ORDER BY id DESC LIMIT 1) AS fin,
+                 (SELECT CAST(valor AS UNSIGNED) FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='BATCH_PROGRAMADOS' ORDER BY id DESC LIMIT 1) AS programados,
+                 (SELECT CAST(valor AS UNSIGNED) FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='BATCH_PRODUCIDOS' ORDER BY id DESC LIMIT 1) AS producidos`
+            )).rows[0] || null;
+          }
+          json(res, 200, { ok: true, serverNow, actual, lista });
+        } catch (e) {
+          json(res, 200, { ok: false, error: e.message });
+        } finally { cli.close(); }
+      })();
+      return;
+    }
     res.writeHead(404); res.end('Not found');
   } catch (e) {
     json(res, 500, { error: e.message });

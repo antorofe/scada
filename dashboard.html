@@ -243,6 +243,23 @@
   .presets button:hover { background: color-mix(in srgb, var(--brand-b) 12%, transparent); color: var(--ink-1); }
 
   footer { text-align: center; color: var(--ink-muted); font-size: 11.5px; padding: 16px; }
+
+  /* Producciones */
+  .prodgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+  .ptile { background: color-mix(in srgb, var(--brand-b) 5%, transparent); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .ptile .label { font-size: 11.5px; color: var(--ink-2); font-weight: 600; }
+  .ptile .val { font-size: 22px; font-weight: 800; color: var(--ink-1); margin-top: 3px; }
+  .ptile .val small { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+  .progbar { height: 12px; background: color-mix(in srgb, var(--ink-2) 18%, transparent); border-radius: 999px; overflow: hidden; }
+  .progfill { height: 100%; background: var(--good); border-radius: 999px; transition: width .4s ease; }
+  .prodtable { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .prodtable th { text-align: left; color: var(--ink-2); font-size: 11.5px; text-transform: uppercase; letter-spacing: .4px; font-weight: 700; padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .prodtable td { padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--ink-1); white-space: nowrap; }
+  .prodtable tbody tr:hover { background: color-mix(in srgb, var(--brand-b) 5%, transparent); }
+  .prodtable tr.curr { background: color-mix(in srgb, var(--good) 9%, transparent); }
+  .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
+  .badge.run { color: var(--good); background: color-mix(in srgb, var(--good) 15%, transparent); }
+  .badge.done { color: var(--ink-2); background: color-mix(in srgb, var(--ink-2) 15%, transparent); }
 </style>
 </head>
 <body>
@@ -265,6 +282,7 @@
   <button data-view="dash" class="active">⚡ Energía</button>
   <button data-view="almacen">📦 Almacen P1</button>
   <button data-view="proceso">🏭 Proceso P3</button>
+  <button data-view="producciones">📋 Producciones</button>
   <button data-view="mysql">🗄 MySQL</button>
   <button data-view="config">🔧 Configuración</button>
 </nav>
@@ -341,6 +359,45 @@
     <h2 style="margin:14px 0 6px; color:var(--ink-1)">Módulo de Almacén — Planta 1</h2>
     <p style="color:var(--ink-2); max-width:520px; margin:0 auto">Próximamente: monitoreo de niveles, silos y variables de la planta de almacenamiento.
     Se integrará aquí de forma nativa, como nuevo módulo del SCADA.</p>
+  </div>
+</main>
+
+<main id="prodView" hidden>
+  <div class="section-title">Producción en curso</div>
+  <div class="card" id="prodActualCard">
+    <div id="prodActualEmpty" style="text-align:center; color:var(--ink-2); padding:22px" hidden>Sin producción en curso.</div>
+    <div id="prodActualBody">
+      <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:16px">
+        <span class="devstate off" id="prodEstado"><span class="led"></span>—</span>
+        <div style="font-size:24px; font-weight:800; color:var(--ink-1)">Lote <span id="prodLote" class="tnum">—</span></div>
+      </div>
+      <div class="prodgrid">
+        <div class="ptile"><div class="label">Inicio</div><div class="val tnum" id="prodInicio">—</div></div>
+        <div class="ptile"><div class="label">Transcurrido</div><div class="val tnum" id="prodDur">—</div></div>
+        <div class="ptile"><div class="label">Batches producidos</div><div class="val tnum" id="prodProd">—</div></div>
+        <div class="ptile"><div class="label">Batches programados</div><div class="val tnum" id="prodProg">—</div></div>
+      </div>
+      <div style="margin-top:18px">
+        <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--ink-2); margin-bottom:6px">
+          <span>Progreso de la producción</span><span class="tnum" id="prodPct">—</span>
+        </div>
+        <div class="progbar"><div class="progfill" id="prodFill" style="width:0%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">Últimas 20 producciones</div>
+  <div class="card">
+    <div style="overflow-x:auto">
+      <table class="prodtable" id="prodTable">
+        <thead>
+          <tr><th>Lote</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Batches</th><th>Estado</th></tr>
+        </thead>
+        <tbody id="prodTbody">
+          <tr><td colspan="6" style="text-align:center; color:var(--ink-2); padding:20px">Cargando…</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </main>
 
@@ -911,7 +968,7 @@ document.querySelector(".presets").addEventListener("click", (e) => {
 });
 
 /* ---------- Navegación entre módulos (menú superior) ---------- */
-const VIEWS = { dash: "#dashView", reportes: "#histView", almacen: "#almView", proceso: "#procView", mysql: "#mysqlView", config: "#cfgView" };
+const VIEWS = { dash: "#dashView", reportes: "#histView", almacen: "#almView", proceso: "#procView", producciones: "#prodView", mysql: "#mysqlView", config: "#cfgView" };
 function showView(v) {
   if (!VIEWS[v]) v = "dash";
   for (const k in VIEWS) $(VIEWS[k]).hidden = (k !== v);
@@ -930,6 +987,7 @@ function showView(v) {
     setTimeout(runHist, 60);
   }
   if (v === "mysql") probarMysql();   // prueba la conexión a la BD de producción al entrar
+  if (v === "producciones") { cargarProducciones(); startProdPoll(); } else { stopProdPoll(); }
 }
 $("#topnav").addEventListener("click", (e) => { const b = e.target.closest("[data-view]"); if (b) showView(b.dataset.view); });
 $("#btnEditDev").addEventListener("click", () => showView("config"));   // editar config desde la barra del medidor
@@ -1034,6 +1092,85 @@ $("#btnSaveDev").addEventListener("click", async () => {
     setTimeout(() => s.classList.remove("show"), 3000);
   } catch (_) {}
 });
+
+/* ---------- Producciones (data_ciclado de la BD de producción) ---------- */
+// Parsea "YYYY-MM-DD HH:MM:SS" (hora local del servidor) a Date.
+function parseFecha(s) { return s ? new Date(String(s).replace(" ", "T")) : null; }
+function fmtFechaHora(s) {
+  const d = parseFecha(s); if (!d || isNaN(d)) return "—";
+  return d.toLocaleString("es-CL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+// Duración entre dos fechas del servidor. Para producciones en curso se pasa
+// serverNow (hora del servidor de BD) como fin, no el reloj del navegador.
+function fmtDuracion(iniStr, finStr) {
+  const ini = parseFecha(iniStr); if (!ini || isNaN(ini)) return "—";
+  const fin = parseFecha(finStr); if (!fin || isNaN(fin)) return "—";
+  let s = Math.max(0, Math.floor((fin - ini) / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
+}
+function numOrDash(v) { return (v === null || v === undefined || v === "") ? null : Number(v); }
+
+let prodServerNow = null;
+async function cargarProducciones() {
+  try {
+    const r = await fetch("/api/producciones?limit=20").then(x => x.json());
+    if (!r.ok) throw new Error(r.error || "sin datos");
+    prodServerNow = r.serverNow || null;
+    renderProdActual(r.actual);
+    renderProdLista(r.lista || [], r.actual);
+  } catch (e) {
+    $("#prodTbody").innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
+  }
+}
+
+function renderProdActual(a) {
+  const empty = $("#prodActualEmpty"), body = $("#prodActualBody");
+  // "en curso" = existe un lote y su último evento PRODUCCION_INICIADA es 1
+  if (!a || String(a.en_marcha) !== "1") {
+    empty.hidden = false; body.hidden = true;
+    empty.textContent = a ? `Sin producción en curso (último lote ${a.lote}, detenido).` : "Sin producción en curso.";
+    return;
+  }
+  empty.hidden = true; body.hidden = false;
+  const st = $("#prodEstado");
+  st.className = "devstate on"; st.innerHTML = '<span class="led"></span>En marcha';
+  $("#prodLote").textContent = a.lote ?? "—";
+  $("#prodInicio").textContent = fmtFechaHora(a.inicio);
+  $("#prodDur").textContent = fmtDuracion(a.inicio, prodServerNow);
+  const prod = numOrDash(a.producidos), prog = numOrDash(a.programados);
+  $("#prodProd").textContent = prod ?? "—";
+  $("#prodProg").textContent = prog ?? "—";
+  const pct = (prog && prog > 0 && prod != null) ? Math.min(100, Math.round(prod / prog * 100)) : null;
+  $("#prodPct").textContent = pct != null ? pct + "%" : "—";
+  $("#prodFill").style.width = (pct != null ? pct : 0) + "%";
+}
+
+function renderProdLista(lista, actual) {
+  if (!lista.length) { $("#prodTbody").innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--ink-2); padding:20px">Sin producciones.</td></tr>`; return; }
+  const enCursoLote = (actual && String(actual.en_marcha) === "1") ? String(actual.lote) : null;
+  $("#prodTbody").innerHTML = lista.map(r => {
+    const enCurso = String(r.lote) === enCursoLote;
+    const prod = numOrDash(r.producidos), prog = numOrDash(r.programados);
+    const batches = (prod ?? "—") + (prog != null ? ` / ${prog}` : "");
+    const estado = enCurso
+      ? '<span class="badge run"><span class="led" style="width:7px;height:7px;border-radius:50%;background:var(--good)"></span>En marcha</span>'
+      : '<span class="badge done">Finalizada</span>';
+    const fin = enCurso ? "—" : fmtFechaHora(r.fin);
+    return `<tr class="${enCurso ? "curr" : ""}">
+      <td class="tnum"><b>${r.lote}</b></td>
+      <td class="tnum">${fmtFechaHora(r.inicio)}</td>
+      <td class="tnum">${fin}</td>
+      <td class="tnum">${fmtDuracion(r.inicio, enCurso ? prodServerNow : r.fin)}</td>
+      <td class="tnum">${batches}</td>
+      <td>${estado}</td>
+    </tr>`;
+  }).join("");
+}
+
+let prodTimer = null;
+function startProdPoll() { if (!prodTimer) prodTimer = setInterval(cargarProducciones, 5000); }
+function stopProdPoll() { if (prodTimer) { clearInterval(prodTimer); prodTimer = null; } }
 
 /* ---------- MySQL: prueba de conexión a la BD de producción ---------- */
 async function probarMysql() {
