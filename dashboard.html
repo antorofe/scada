@@ -1340,7 +1340,7 @@ function startProdPoll() {
   prodTimerActual = setInterval(refrescarActual, 2000);   // producción en curso: cada 2 s
   prodTimerLista = setInterval(cargarProducciones, 15000); // lista completa: cada 15 s
   prodTimerDur = setInterval(tickProdDur, 1000);           // transcurrido: cada 1 s
-  prodTimerChart = setInterval(refrescarProdChart, 8000);  // gráfica de corriente: cada 8 s
+  prodTimerChart = setInterval(refrescarProdChart, 3000);  // gráfica de corriente: cada 3 s (tiempo real)
 }
 function stopProdPoll() {
   clearInterval(prodTimerActual); clearInterval(prodTimerLista); clearInterval(prodTimerDur); clearInterval(prodTimerChart);
@@ -1360,7 +1360,7 @@ async function refrescarProdChart() {
       fetch(`/api/minmax?from=${from}&to=${to}`).then(x => x.json()),
     ]);
     const pts = (h.points || []).map(p => ({ t: p.t, y: p.i })).filter(p => p.y != null);
-    prodChartI.setData(pts, [from, to]);
+    prodChartI.setData(pts, { t0: from, t1: to });
     $("#prodMinI").textContent = m.i_min != null ? fmt(m.i_min, 1) + " A" : "—";
     $("#prodAvgI").textContent = m.i_avg != null ? fmt(m.i_avg, 1) + " A" : "—";
     $("#prodMaxI").textContent = m.i_max != null ? fmt(m.i_max, 1) + " A" : "—";
