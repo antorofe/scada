@@ -171,6 +171,19 @@ function calcBatches(prodVals, progVals) {
   }
   return { producidos: hechosAntes + segMax, programados: progTotal };
 }
+// Segmentos de producción (para el detalle del tiempo transcurrido): pares
+// inicio→fin de cada tramo activo. El último queda "abierto" (hasta=null) si la
+// producción sigue en marcha; el cliente lo cierra en "ahora".
+function segmentosProduccion(eventos) {
+  const segs = [];
+  let abierto = null;
+  for (const ev of eventos) {
+    if (String(ev.valor) === '1') { if (abierto == null) abierto = ev; }
+    else { if (abierto != null) { segs.push({ desde: Number(abierto.ms), desde_f: abierto.fecha, hasta: Number(ev.ms), hasta_f: ev.fecha }); abierto = null; } }
+  }
+  if (abierto != null) segs.push({ desde: Number(abierto.ms), desde_f: abierto.fecha, hasta: null, hasta_f: null });
+  return segs;
+}
 // Suma la energía del PFW03 sobre una lista de tramos [from,to] (kWh).
 function energiaTramos(tramos) {
   let kwh = 0, samples = 0;
@@ -354,7 +367,7 @@ const server = http.createServer((req, res) => {
               `SELECT
                  ${lote} AS lote,
                  (SELECT valor FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' ORDER BY id DESC LIMIT 1) AS en_marcha,
-                 (SELECT fecha FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' AND valor='1' ORDER BY id DESC LIMIT 1) AS inicio,
+                 (SELECT fecha FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' AND valor='1' ORDER BY id ASC LIMIT 1) AS inicio,
                  (SELECT fecha FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' AND valor='0' ORDER BY id DESC LIMIT 1) AS fin,
                  (SELECT UNIX_TIMESTAMP(MIN(fecha))*1000 FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' AND valor='1') AS inicio_ms,
                  (SELECT CAST(valor AS UNSIGNED) FROM segra_fabrica.data_ciclado WHERE lote=${lote} AND variable='BATCH_PROGRAMADOS' ORDER BY id DESC LIMIT 1) AS programados,
@@ -369,10 +382,11 @@ const server = http.createServer((req, res) => {
           if (actual) {
             const lote = Number(actual.lote);
             const evs = (await cli.query(
-              `SELECT valor, UNIX_TIMESTAMP(fecha)*1000 AS ms FROM segra_fabrica.data_ciclado
+              `SELECT valor, UNIX_TIMESTAMP(fecha)*1000 AS ms, fecha FROM segra_fabrica.data_ciclado
                WHERE variable='PRODUCCION_INICIADA' AND lote=${lote} ORDER BY id`
             )).rows;
             actual.kwh = evs.length ? energiaTramos(tramosActivos(evs, ahora)).kwh : null;
+            actual.segmentos = segmentosProduccion(evs);   // para el detalle del transcurrido
             const p = (await cli.query(
               `SELECT pr.nombre AS producto, pg.cod_producto, pg.cliente, pg.kg_produccion AS kg,
                       pg.kg_batch, pg.tipo, pg.formato

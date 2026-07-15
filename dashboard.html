@@ -389,7 +389,7 @@
       <div id="prodMeta" style="color:var(--ink-2); font-size:13px; margin-bottom:16px">—</div>
       <div class="prodgrid">
         <div class="ptile"><div class="label">Inicio</div><div class="val tnum" id="prodInicio">—</div></div>
-        <div class="ptile"><div class="label">Transcurrido</div><div class="val tnum" id="prodDur">—</div></div>
+        <div class="ptile clickable" id="tileTranscurrido" title="Ver cómo se calcula"><div class="label">Transcurrido</div><div class="val tnum" id="prodDur">—</div></div>
         <div class="ptile clickable" id="tileBatchesProd" title="Ver detalle de cada batch"><div class="label">Batches producidos</div><div class="val tnum" id="prodProd">—</div></div>
         <div class="ptile"><div class="label">Batches programados</div><div class="val tnum" id="prodProg">—</div></div>
         <div class="ptile"><div class="label">Tamaño del batch</div><div class="val tnum"><span id="prodKgBatch">—</span><small> kg</small></div></div>
@@ -437,6 +437,26 @@
         <thead><tr><th>N°</th><th>Contador</th><th>Hora</th><th>Min desde anterior</th><th>kg/min</th></tr></thead>
         <tbody id="bmBody"></tbody>
       </table>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: detalle del tiempo transcurrido -->
+<div class="modal-overlay" id="tiempoModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Tiempo transcurrido — Lote <span id="tmLote" class="tnum">—</span></div>
+        <div class="modal-sub">Suma de los periodos activos (las pausas no cuentan)</div>
+      </div>
+      <button class="modal-close" id="tmClose" title="Cerrar">✕</button>
+    </div>
+    <div class="modal-body">
+      <table class="prodtable" id="tmTable">
+        <thead><tr><th>Periodo</th><th>Inicio</th><th>Fin</th><th>Duración</th></tr></thead>
+        <tbody id="tmBody"></tbody>
+      </table>
+      <div id="tmTotal" style="margin-top:14px; padding-top:12px; border-top:2px solid var(--border); display:flex; justify-content:space-between; font-weight:800; color:var(--ink-1)"><span>Total activo</span><span class="tnum" id="tmTotalVal">—</span></div>
     </div>
   </div>
 </div>
@@ -1167,6 +1187,22 @@ function fmtDuracion(iniStr, finStr) {
   return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
 }
 function numOrDash(v) { return (v === null || v === undefined || v === "") ? null : Number(v); }
+function fmtDurMs(ms) {
+  if (ms == null || ms < 0) ms = 0;
+  const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
+}
+// Tiempo transcurrido ACTIVO = suma de la duración de cada segmento (excluye pausas).
+// El segmento abierto (hasta=null) se cierra en la hora estimada del servidor.
+function calcTranscurridoMs(a) {
+  const segs = (a && a.segmentos) || [];
+  let total = 0;
+  for (const s of segs) {
+    const hasta = s.hasta != null ? Number(s.hasta) : serverNowMs();
+    total += Math.max(0, hasta - Number(s.desde));
+  }
+  return total;
+}
 
 // Carga completa (producción en curso + últimas 20). Se usa al entrar y cada 15 s.
 async function cargarProducciones() {
@@ -1196,7 +1232,7 @@ function tickProdDur() {
   const a = prodActualData;
   if (!a || String(a.en_marcha) !== "1") return;
   const el = document.getElementById("prodDur");
-  if (el) el.textContent = fmtDuracion(a.inicio, serverNowMs());
+  if (el) el.textContent = fmtDurMs(calcTranscurridoMs(a));
 }
 
 function renderProdActual(a) {
@@ -1214,7 +1250,7 @@ function renderProdActual(a) {
   $("#prodProducto").textContent = a.producto || (a.cod_producto != null ? `Producto ${a.cod_producto}` : "—");
   $("#prodMeta").textContent = prodMetaLinea(a) || "—";
   $("#prodInicio").textContent = fmtFechaHora(a.inicio);
-  $("#prodDur").textContent = fmtDuracion(a.inicio, serverNowMs());
+  $("#prodDur").textContent = fmtDurMs(calcTranscurridoMs(a));
   const prod = numOrDash(a.producidos), prog = numOrDash(a.programados);
   $("#prodProd").textContent = prod ?? "—";
   $("#prodProg").textContent = prog ?? "—";
@@ -1344,7 +1380,46 @@ function renderBatches(r) {
 $("#tileBatchesProd").addEventListener("click", () => { if (prodActualData) abrirModalBatches(prodActualData.lote); });
 $("#bmClose").addEventListener("click", cerrarModalBatches);
 $("#batchModal").addEventListener("click", (e) => { if (e.target === $("#batchModal")) cerrarModalBatches(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") cerrarModalBatches(); });
+
+/* ---------- Modal: detalle del tiempo transcurrido ---------- */
+function cerrarModalTiempo() { const m = document.getElementById("tiempoModal"); if (m) m.hidden = true; }
+function abrirModalTiempo() {
+  const a = prodActualData;
+  if (!a || String(a.en_marcha) !== "1") return;
+  $("#tmLote").textContent = a.lote ?? "—";
+  renderTiempo(a);
+  $("#tiempoModal").hidden = false;
+}
+function renderTiempo(a) {
+  const segs = (a.segmentos || []).map(s => ({
+    desde: Number(s.desde), hasta: s.hasta != null ? Number(s.hasta) : null,
+    desde_f: s.desde_f, hasta_f: s.hasta_f,
+  }));
+  let filas = "";
+  segs.forEach((s, i) => {
+    const abierto = s.hasta == null;
+    const hasta = abierto ? serverNowMs() : s.hasta;
+    filas += `<tr>
+      <td>Producción ${i + 1}${abierto ? ' <span class="badge run" style="margin-left:4px"><span class="led" style="width:6px;height:6px;border-radius:50%;background:var(--good)"></span>en curso</span>' : ''}</td>
+      <td class="tnum">${fmtFechaHora(s.desde_f)}</td>
+      <td class="tnum">${abierto ? "—" : fmtFechaHora(s.hasta_f)}</td>
+      <td class="tnum">${fmtDurMs(hasta - s.desde)}</td>
+    </tr>`;
+    const sig = segs[i + 1];
+    if (sig) filas += `<tr style="color:var(--ink-muted)">
+      <td>Pausa (no cuenta)</td>
+      <td class="tnum">${fmtFechaHora(s.hasta_f)}</td>
+      <td class="tnum">${fmtFechaHora(sig.desde_f)}</td>
+      <td class="tnum">−${fmtDurMs(sig.desde - s.hasta)}</td>
+    </tr>`;
+  });
+  $("#tmBody").innerHTML = filas || `<tr><td colspan="4" style="text-align:center;color:var(--ink-2);padding:16px">Sin periodos.</td></tr>`;
+  $("#tmTotalVal").textContent = fmtDurMs(calcTranscurridoMs(a));
+}
+$("#tileTranscurrido").addEventListener("click", abrirModalTiempo);
+$("#tmClose").addEventListener("click", cerrarModalTiempo);
+$("#tiempoModal").addEventListener("click", (e) => { if (e.target === $("#tiempoModal")) cerrarModalTiempo(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { cerrarModalBatches(); cerrarModalTiempo(); } });
 
 /* ---------- MySQL: prueba de conexión a la BD de producción ---------- */
 async function probarMysql() {
