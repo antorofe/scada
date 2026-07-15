@@ -260,6 +260,19 @@
   .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
   .badge.run { color: var(--good); background: color-mix(in srgb, var(--good) 15%, transparent); }
   .badge.done { color: var(--ink-2); background: color-mix(in srgb, var(--ink-2) 15%, transparent); }
+  .ptile.clickable { cursor: pointer; transition: background .15s, border-color .15s; }
+  .ptile.clickable:hover { background: color-mix(in srgb, var(--brand-b) 12%, transparent); border-color: var(--brand-b); }
+  .ptile.clickable .label::after { content: " 🔎"; font-size: 11px; opacity: .6; }
+
+  /* Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+  .modal-card { background: var(--card); border-radius: 14px; max-width: 640px; width: 100%; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.35); overflow: hidden; }
+  .modal-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 18px 20px; border-bottom: 1px solid var(--border); }
+  .modal-title { font-size: 17px; font-weight: 800; color: var(--ink-1); }
+  .modal-sub { font-size: 13px; color: var(--ink-2); margin-top: 3px; }
+  .modal-close { border: 0; background: transparent; color: var(--ink-2); font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 6px; }
+  .modal-close:hover { color: var(--ink-1); background: color-mix(in srgb, var(--ink-2) 12%, transparent); }
+  .modal-body { padding: 6px 20px 20px; overflow: auto; }
 </style>
 </head>
 <body>
@@ -376,7 +389,7 @@
       <div class="prodgrid">
         <div class="ptile"><div class="label">Inicio</div><div class="val tnum" id="prodInicio">—</div></div>
         <div class="ptile"><div class="label">Transcurrido</div><div class="val tnum" id="prodDur">—</div></div>
-        <div class="ptile"><div class="label">Batches producidos</div><div class="val tnum" id="prodProd">—</div></div>
+        <div class="ptile clickable" id="tileBatchesProd" title="Ver detalle de cada batch"><div class="label">Batches producidos</div><div class="val tnum" id="prodProd">—</div></div>
         <div class="ptile"><div class="label">Batches programados</div><div class="val tnum" id="prodProg">—</div></div>
         <div class="ptile"><div class="label">Tamaño del batch</div><div class="val tnum"><span id="prodKgBatch">—</span><small> kg</small></div></div>
         <div class="ptile" style="--hero:var(--good)"><div class="label">Energía consumida</div><div class="val tnum"><span id="prodKwh">—</span><small> kWh</small></div></div>
@@ -407,6 +420,25 @@
     </div>
   </div>
 </main>
+
+<!-- Modal: detalle de batches producidos -->
+<div class="modal-overlay" id="batchModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Batches producidos — Lote <span id="bmLote" class="tnum">—</span></div>
+        <div class="modal-sub" id="bmSub">—</div>
+      </div>
+      <button class="modal-close" id="bmClose" title="Cerrar">✕</button>
+    </div>
+    <div class="modal-body">
+      <table class="prodtable" id="bmTable">
+        <thead><tr><th>N°</th><th>Contador</th><th>Hora</th><th>Min desde anterior</th><th>kg/min</th></tr></thead>
+        <tbody id="bmBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
 <main id="mysqlView" hidden>
   <div class="section-title">MySQL — Base de datos de producción</div>
@@ -981,6 +1013,7 @@ const VIEWS = { dash: "#dashView", reportes: "#histView", almacen: "#almView", p
 let prodServerNow = null;
 let prodActualData = null, prodSyncLocal = 0;       // último dato en curso + ancla de reloj
 let prodTimerActual = null, prodTimerLista = null, prodTimerDur = null;
+function cerrarModalBatches() { const m = document.getElementById("batchModal"); if (m) m.hidden = true; }
 function showView(v) {
   if (!VIEWS[v]) v = "dash";
   for (const k in VIEWS) $(VIEWS[k]).hidden = (k !== v);
@@ -1264,6 +1297,53 @@ function stopProdPoll() {
   clearInterval(prodTimerActual); clearInterval(prodTimerLista); clearInterval(prodTimerDur);
   prodTimerActual = prodTimerLista = prodTimerDur = null;
 }
+
+/* ---------- Modal: detalle de batches producidos ---------- */
+function fmtHoraSeg(s) { const d = parseFecha(s); return (!d || isNaN(d)) ? "—" : d.toLocaleTimeString("es-CL", { hour12: false }); }
+async function abrirModalBatches(lote) {
+  if (lote == null) return;
+  $("#bmLote").textContent = lote;
+  $("#bmSub").textContent = "Cargando…";
+  $("#bmBody").innerHTML = "";
+  $("#batchModal").hidden = false;
+  try {
+    const r = await fetch(`/api/producciones/batches?lote=${encodeURIComponent(lote)}`).then(x => x.json());
+    if (!r.ok) throw new Error(r.error || "sin datos");
+    renderBatches(r);
+  } catch (e) { $("#bmSub").textContent = "✗ " + e.message; }
+}
+function renderBatches(r) {
+  const kgB = numOrDash(r.kg_batch);
+  const bs = r.batches || [];
+  // Minutos desde el batch anterior; el primero se mide desde el inicio de la producción.
+  let prev = r.inicio_ms != null ? Number(r.inicio_ms) : null;
+  let sumaKgMin = 0, cont = 0;
+  const filas = bs.map((b, i) => {
+    const ms = Number(b.ms);
+    const min = (prev != null) ? (ms - prev) / 60000 : null;
+    const kgmin = (kgB != null && min != null && min > 0) ? kgB / min : null;
+    if (kgmin != null) { sumaKgMin += kgmin; cont++; }
+    prev = ms;
+    return `<tr>
+      <td class="tnum">${i + 1}</td>
+      <td class="tnum">${b.n}</td>
+      <td class="tnum">${fmtHoraSeg(b.fecha)}</td>
+      <td class="tnum">${min != null ? fmt(min, 1) + " min" : "—"}</td>
+      <td class="tnum">${kgmin != null ? fmt(kgmin, 1) + " kg/min" : "—"}</td>
+    </tr>`;
+  }).join("");
+  $("#bmBody").innerHTML = filas || `<tr><td colspan="5" style="text-align:center;color:var(--ink-2);padding:16px">Sin batches producidos aún.</td></tr>`;
+  const prom = cont > 0 ? sumaKgMin / cont : null;
+  $("#bmSub").textContent = [
+    kgB != null ? `Tamaño batch ${fmt(kgB, 0)} kg` : null,
+    `${bs.length} ${bs.length === 1 ? "batch" : "batches"}`,
+    prom != null ? `promedio ${fmt(prom, 1)} kg/min` : null,
+  ].filter(Boolean).join(" · ");
+}
+$("#tileBatchesProd").addEventListener("click", () => { if (prodActualData) abrirModalBatches(prodActualData.lote); });
+$("#bmClose").addEventListener("click", cerrarModalBatches);
+$("#batchModal").addEventListener("click", (e) => { if (e.target === $("#batchModal")) cerrarModalBatches(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") cerrarModalBatches(); });
 
 /* ---------- MySQL: prueba de conexión a la BD de producción ---------- */
 async function probarMysql() {

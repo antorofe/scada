@@ -405,6 +405,41 @@ const server = http.createServer((req, res) => {
       })();
       return;
     }
+    // Detalle de batches producidos de un lote: cada evento BATCH_PRODUCIDOS (valor>0)
+    // con su hora. El cliente calcula minutos entre batch y kg/min (kg_batch / min).
+    if (url.pathname === '/api/producciones/batches') {
+      const lote = parseInt(url.searchParams.get('lote') || '', 10);
+      if (!Number.isInteger(lote)) { return json(res, 400, { ok: false, error: 'lote inválido' }); }
+      (async () => {
+        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        try {
+          await cli.connect();
+          const serverNow = (await cli.query('SELECT NOW() AS now')).rows[0].now;
+          const kgBatch = (await cli.query(
+            `SELECT kg_batch FROM segra.programacion WHERE lote=${lote} LIMIT 1`
+          )).rows[0];
+          const inicio = (await cli.query(
+            `SELECT UNIX_TIMESTAMP(MIN(fecha))*1000 AS inicio_ms FROM segra_fabrica.data_ciclado
+             WHERE lote=${lote} AND variable='PRODUCCION_INICIADA' AND valor='1'`
+          )).rows[0];
+          const batches = (await cli.query(
+            `SELECT CAST(valor AS UNSIGNED) AS n, UNIX_TIMESTAMP(fecha)*1000 AS ms, fecha
+             FROM segra_fabrica.data_ciclado
+             WHERE lote=${lote} AND variable='BATCH_PRODUCIDOS' AND CAST(valor AS UNSIGNED) > 0
+             ORDER BY id`
+          )).rows;
+          json(res, 200, {
+            ok: true, lote, serverNow,
+            kg_batch: kgBatch ? kgBatch.kg_batch : null,
+            inicio_ms: inicio ? inicio.inicio_ms : null,
+            batches,
+          });
+        } catch (e) {
+          json(res, 200, { ok: false, error: e.message });
+        } finally { cli.close(); }
+      })();
+      return;
+    }
     res.writeHead(404); res.end('Not found');
   } catch (e) {
     json(res, 500, { error: e.message });
