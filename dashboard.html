@@ -969,6 +969,10 @@ document.querySelector(".presets").addEventListener("click", (e) => {
 
 /* ---------- Navegación entre módulos (menú superior) ---------- */
 const VIEWS = { dash: "#dashView", reportes: "#histView", almacen: "#almView", proceso: "#procView", producciones: "#prodView", mysql: "#mysqlView", config: "#cfgView" };
+// Estado de Producciones: declarado aquí (antes del deep-link que invoca showView)
+// para que no quede en TDZ si se entra directo con #producciones al cargar.
+let prodServerNow = null;
+let prodTimer = null;
 function showView(v) {
   if (!VIEWS[v]) v = "dash";
   for (const k in VIEWS) $(VIEWS[k]).hidden = (k !== v);
@@ -1111,7 +1115,6 @@ function fmtDuracion(iniStr, finStr) {
 }
 function numOrDash(v) { return (v === null || v === undefined || v === "") ? null : Number(v); }
 
-let prodServerNow = null;
 async function cargarProducciones() {
   try {
     const r = await fetch("/api/producciones?limit=20").then(x => x.json());
@@ -1168,7 +1171,6 @@ function renderProdLista(lista, actual) {
   }).join("");
 }
 
-let prodTimer = null;
 function startProdPoll() { if (!prodTimer) prodTimer = setInterval(cargarProducciones, 5000); }
 function stopProdPoll() { if (prodTimer) { clearInterval(prodTimer); prodTimer = null; } }
 
