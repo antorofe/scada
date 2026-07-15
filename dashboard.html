@@ -421,10 +421,10 @@
     <div style="overflow-x:auto">
       <table class="prodtable" id="prodTable">
         <thead>
-          <tr><th>Lote</th><th>Producto</th><th>Cliente</th><th>Tipo</th><th>Formato</th><th>kg</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Batches</th><th>Energía</th><th>Costo</th><th>$/kg</th><th>Estado</th></tr>
+          <tr><th>Lote</th><th>Producto</th><th>Cliente</th><th>Tipo</th><th>Formato</th><th>kg</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Batches</th><th>kg/h</th><th>Energía</th><th>Costo</th><th>$/kg</th><th>Estado</th></tr>
         </thead>
         <tbody id="prodTbody">
-          <tr><td colspan="14" style="text-align:center; color:var(--ink-2); padding:20px">Cargando…</td></tr>
+          <tr><td colspan="15" style="text-align:center; color:var(--ink-2); padding:20px">Cargando…</td></tr>
         </tbody>
       </table>
     </div>
@@ -1199,7 +1199,7 @@ async function cargarProducciones() {
     renderProdActual(r.actual);
     renderProdLista(r.lista || [], r.actual);
   } catch (e) {
-    $("#prodTbody").innerHTML = `<tr><td colspan="14" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
+    $("#prodTbody").innerHTML = `<tr><td colspan="15" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
   }
 }
 // Refresco liviano SOLO de la producción en curso (AJAX cada 2 s → tiempo real).
@@ -1260,6 +1260,14 @@ function costoEnergia(kwh) {
   if (kwh == null || !(cfg.kwhValue > 0)) return "—";
   return `${cfg.currency}${fmt(kwh * cfg.kwhValue, 0)}`;
 }
+// kg por hora = kg realizados (batches producidos × tamaño de batch) / horas activas
+// (tiempo de producción sin pausas). Refleja el ritmo real de producción.
+function kgPorHora(producidos, kgBatch, activoMs) {
+  const p = numOrDash(producidos), kb = numOrDash(kgBatch);
+  if (p == null || kb == null || !activoMs || activoMs <= 0) return "—";
+  const horas = activoMs / 3600000;
+  return fmt((p * kb) / horas, 0);
+}
 // Costo energético por kilo ($/kg) = (kWh × $/kWh) / kg. Solo tiene sentido con la
 // producción terminada (energía y kilos finales); en curso se muestra "—".
 function costoPorKg(kwh, kg, terminada) {
@@ -1277,7 +1285,7 @@ function prodMetaLinea(o) {
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 
 function renderProdLista(lista, actual) {
-  if (!lista.length) { $("#prodTbody").innerHTML = `<tr><td colspan="14" style="text-align:center; color:var(--ink-2); padding:20px">Sin producciones.</td></tr>`; return; }
+  if (!lista.length) { $("#prodTbody").innerHTML = `<tr><td colspan="15" style="text-align:center; color:var(--ink-2); padding:20px">Sin producciones.</td></tr>`; return; }
   const enCursoLote = (actual && String(actual.en_marcha) === "1") ? String(actual.lote) : null;
   $("#prodTbody").innerHTML = lista.map(r => {
     const enCurso = String(r.lote) === enCursoLote;
@@ -1301,6 +1309,7 @@ function renderProdLista(lista, actual) {
       <td class="tnum">${fin}</td>
       <td class="tnum">${fmtDuracion(r.inicio, enCurso ? prodServerNow : r.fin)}</td>
       <td class="tnum">${batches}</td>
+      <td class="tnum">${kgPorHora(r.producidos, r.kg_batch, numOrDash(r.activo_ms))}</td>
       <td class="tnum">${kwh != null ? fmt(kwh, 2) + " kWh" : "—"}</td>
       <td class="tnum">${costoEnergia(kwh)}</td>
       <td class="tnum">${costoPorKg(kwh, kg, !enCurso)}</td>
@@ -1414,7 +1423,7 @@ async function toggleFilaDetalle(tr, lote) {
   document.querySelectorAll("#prodTbody tr.expanded").forEach(el => el.classList.remove("expanded"));
   const dr = document.createElement("tr");
   dr.className = "detail-row";
-  dr.innerHTML = `<td colspan="14"><div class="detail-inner">Cargando…</div></td>`;
+  dr.innerHTML = `<td colspan="15"><div class="detail-inner">Cargando…</div></td>`;
   tr.after(dr); tr.classList.add("expanded"); loteExpandido = String(lote);
   try {
     const r = await fetchDetalle(lote);

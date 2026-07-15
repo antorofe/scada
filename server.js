@@ -385,7 +385,9 @@ const server = http.createServer((req, res) => {
               `SELECT valor, UNIX_TIMESTAMP(fecha)*1000 AS ms, fecha FROM segra_fabrica.data_ciclado
                WHERE variable='PRODUCCION_INICIADA' AND lote=${lote} ORDER BY id`
             )).rows;
-            actual.kwh = evs.length ? energiaTramos(tramosActivos(evs, ahora)).kwh : null;
+            const tramosA = tramosActivos(evs, ahora);
+            actual.kwh = evs.length ? energiaTramos(tramosA).kwh : null;
+            actual.activo_ms = tramosA.reduce((a, t) => a + Math.max(0, t[1] - t[0]), 0); // tiempo activo (sin pausas)
             actual.segmentos = segmentosProduccion(evs);   // para el detalle del transcurrido
             const p = (await cli.query(
               `SELECT pr.nombre AS producto, pg.cod_producto, pg.cliente, pg.kg_produccion AS kg,
@@ -445,6 +447,7 @@ const server = http.createServer((req, res) => {
               const enCurso = String(row.lote) === runningLote;
               const cierre = enCurso ? ahora : (row.last_ms != null ? Number(row.last_ms) : null);
               const tramos = tramosActivos(evsL, cierre);
+              row.activo_ms = tramos.reduce((a, t) => a + Math.max(0, t[1] - t[0]), 0); // tiempo activo (sin pausas)
               if (enCurso) {
                 row.kwh = energiaTramos(tramos).kwh;               // en curso → tramos hasta ahora
               } else {
