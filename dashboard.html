@@ -287,6 +287,8 @@
   .modal-card.full { max-width: 98vw; width: 98vw; max-height: 96vh; height: 96vh; }
   .modal-btn { border: 1px solid var(--border); background: transparent; color: var(--ink-2); font: inherit; font-size: 12.5px; font-weight: 600; padding: 5px 12px; border-radius: 7px; cursor: pointer; white-space: nowrap; }
   .modal-btn:hover { background: color-mix(in srgb, var(--brand-b) 12%, transparent); color: var(--brand-b); border-color: var(--brand-b); }
+  .mark-lbl { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--good); font-weight: 600; cursor: pointer; user-select: none; white-space: nowrap; }
+  .mark-lbl input { accent-color: var(--good); cursor: pointer; }
   .chart-zoom { border: 1px solid var(--border); background: transparent; color: var(--ink-2); font: inherit; font-size: 13px; line-height: 1; padding: 4px 9px; border-radius: 7px; cursor: pointer; }
   .chart-zoom:hover { background: color-mix(in srgb, var(--brand-b) 12%, transparent); color: var(--brand-b); border-color: var(--brand-b); }
   #zoomCard { background: var(--card); border-radius: 14px; width: 85vw; height: 85vh; padding: 16px 18px; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
@@ -423,7 +425,9 @@
       </div>
       <div class="chart-card" style="margin-top:18px; border-top:1px solid var(--border); padding-top:16px">
         <div class="top"><div class="name"><span class="swatch" style="background:var(--series-i)"></span>Corriente — desde el inicio de la producción</div>
-          <div style="display:flex; align-items:center; gap:10px"><div class="now tnum"><span id="prodNowI">—</span><small> A</small></div>
+          <div style="display:flex; align-items:center; gap:12px">
+            <label class="mark-lbl"><input type="checkbox" class="mark-toggle" data-chart="prodCorr" checked> batches</label>
+            <div class="now tnum"><span id="prodNowI">—</span><small> A</small></div>
             <button class="chart-zoom" data-zoom="prodCorr" title="Ampliar gráfico">⤢</button></div></div>
         <div class="chart-wrap"><canvas id="prodCanvasI"></canvas><div class="tooltip" id="prodTipI"></div></div>
         <div class="chart-stats">
@@ -673,14 +677,17 @@ class LineChart {
     this.scale = opts.scale || ((y) => y); // p.ej. W→kW
     this.pts = []; this.windowMs = opts.windowMs || 5 * 60000;
     this.hover = null; this.tip = opts.tip;
+    this.markers = []; this.showMarkers = true;   // líneas verticales de batch
     new ResizeObserver(() => this.render()).observe(canvas.parentElement);
     canvas.addEventListener("mousemove", (e) => this.onMove(e));
     canvas.addEventListener("mouseleave", () => { this.hover = null; if (this.tip) this.tip.style.display = "none"; this.render(); });
   }
   setData(arr, range) { this.pts = arr.map(p => ({ t: p.t, y: this.scale(p.y) })); this.xRange = range || null; this.render(); }
+  setMarkers(m) { this.markers = m || []; this.render(); }   // m: [{n, ms}]
   cloneInto(canvas, tip) {   // re-dibuja los mismos datos en otro canvas (para ampliar)
     const c = new LineChart(canvas, { colorVar: this.colorVar, unit: this.unit, dec: this.dec, tip });
-    c.pts = this.pts.slice(); c.xRange = this.xRange; c.render(); return c;
+    c.pts = this.pts.slice(); c.xRange = this.xRange;
+    c.markers = this.markers; c.showMarkers = this.showMarkers; c.render(); return c;
   }
   push(t, y) {
     this.pts.push({ t, y: this.scale(y) });
@@ -743,6 +750,21 @@ class LineChart {
       const hh = String(d.getHours()).padStart(2, "0"), mm = String(d.getMinutes()).padStart(2, "0"), ss = String(d.getSeconds()).padStart(2, "0");
       const lbl = span <= 5 * 60000 ? `${hh}:${mm}:${ss}` : span <= 26 * 3600000 ? `${hh}:${mm}` : `${DD}/${MM} ${hh}:${mm}`;
       ctx.fillText(lbl, px, h - P.b + 5);
+    }
+    // Marcadores verticales de batch (línea verde punteada + número)
+    if (this.showMarkers && this.markers && this.markers.length) {
+      const green = cssVar("--good");
+      ctx.save(); ctx.font = "bold 10px system-ui, sans-serif";
+      for (const mk of this.markers) {
+        if (mk.ms < t0 || mk.ms > t1) continue;
+        const mx = X(mk.ms);
+        ctx.strokeStyle = green; ctx.globalAlpha = 0.5; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+        ctx.beginPath(); ctx.moveTo(mx, P.t + 12); ctx.lineTo(mx, P.t + ph); ctx.stroke();
+        ctx.setLineDash([]); ctx.globalAlpha = 1;
+        ctx.fillStyle = green; ctx.textAlign = "center"; ctx.textBaseline = "top";
+        ctx.fillText(mk.n, mx, P.t);
+      }
+      ctx.restore();
     }
     if (pts.length < 2) return;
     // Área
@@ -1450,6 +1472,17 @@ function stopProdPoll() {
   clearInterval(prodTimerActual); clearInterval(prodTimerLista); clearInterval(prodTimerDur); clearInterval(prodTimerChart);
   prodTimerActual = prodTimerLista = prodTimerDur = prodTimerChart = null;
 }
+// Convierte los eventos BATCH_PRODUCIDOS en marcadores numerados 1..N (ignora
+// re-registros con el mismo contador). Para las líneas verticales del gráfico.
+function marcadoresBatch(batches) {
+  const out = []; let prevN = null, seq = 0;
+  for (const b of (batches || [])) {
+    const n = Number(b.n);
+    if (n !== prevN) { seq++; out.push({ n: seq, ms: Number(b.ms) }); }
+    prevN = n;
+  }
+  return out;
+}
 // Gráfica de Corriente de la producción en curso (desde el inicio hasta ahora),
 // con Mín/Prom/Máx (agregación SQL, como en Variables monitoreadas).
 let prodChartI = null;
@@ -1465,6 +1498,7 @@ async function refrescarProdChart() {
     ]);
     const pts = (h.points || []).map(p => ({ t: p.t, y: p.i })).filter(p => p.y != null);
     prodChartI.setData(pts, { t0: from, t1: to });
+    prodChartI.setMarkers(marcadoresBatch(a.batches));
     $("#prodMinI").textContent = m.i_min != null ? fmt(m.i_min, 1) + " A" : "—";
     $("#prodAvgI").textContent = m.i_avg != null ? fmt(m.i_avg, 1) + " A" : "—";
     $("#prodMaxI").textContent = m.i_max != null ? fmt(m.i_max, 1) + " A" : "—";
@@ -1557,7 +1591,9 @@ function detalleCompletoHtml(r) {
     <div class="section-title" style="margin-top:2px">Corriente <span style="${muted}">· del inicio al fin de la producción</span></div>
     <div class="chart-card">
       <div class="top"><div class="name"><span class="swatch" style="background:var(--series-i)"></span>Corriente</div>
-        <div style="display:flex; align-items:center; gap:10px"><div class="now tnum"><span id="dtChartNow">—</span><small> A</small></div>
+        <div style="display:flex; align-items:center; gap:12px">
+          <label class="mark-lbl"><input type="checkbox" class="mark-toggle" data-chart="dtCorr" checked> batches</label>
+          <div class="now tnum"><span id="dtChartNow">—</span><small> A</small></div>
           <button class="chart-zoom" data-zoom="dtCorr" title="Ampliar gráfico">⤢</button></div></div>
       <div class="chart-wrap"><canvas id="dtChartCanvas"></canvas><div class="tooltip" id="dtChartTip"></div></div>
       <div class="chart-stats">
@@ -1669,6 +1705,7 @@ async function cargarChartDetalle(r) {
     ]);
     const pts = (h.points || []).map(p => ({ t: p.t, y: p.i })).filter(p => p.y != null);
     dtChart.setData(pts, { t0: from, t1: to });
+    dtChart.setMarkers(marcadoresBatch(r.batches));
     $("#dtChartMin").textContent = m.i_min != null ? fmt(m.i_min, 1) + " A" : "—";
     $("#dtChartAvg").textContent = m.i_avg != null ? fmt(m.i_avg, 1) + " A" : "—";
     $("#dtChartMax").textContent = m.i_max != null ? fmt(m.i_max, 1) + " A" : "—";
@@ -1702,6 +1739,12 @@ function ampliarChart(id) {
 }
 document.addEventListener("click", (e) => {
   const b = e.target.closest(".chart-zoom"); if (b) ampliarChart(b.dataset.zoom);
+});
+// Checkbox de marcadores de batch → muestra/oculta las líneas verticales del gráfico
+document.addEventListener("change", (e) => {
+  const t = e.target.closest(".mark-toggle"); if (!t) return;
+  const reg = chartsReg[t.dataset.chart];
+  if (reg && reg.chart) { reg.chart.showMarkers = t.checked; reg.chart.render(); }
 });
 $("#zoomClose").addEventListener("click", cerrarZoom);
 $("#zoomModal").addEventListener("click", (e) => { if (e.target === $("#zoomModal")) cerrarZoom(); });

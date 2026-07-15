@@ -406,6 +406,12 @@ const server = http.createServer((req, res) => {
               bv.filter(x => x.variable === 'BATCH_PROGRAMADOS').map(x => Number(x.v))
             );
             actual.producidos = cb.producidos; actual.programados = cb.programados;
+            // Horas de cada batch producido (para marcarlas en la gráfica de corriente).
+            actual.batches = (await cli.query(
+              `SELECT CAST(valor AS SIGNED) AS n, UNIX_TIMESTAMP(fecha)*1000 AS ms
+               FROM segra_fabrica.data_ciclado
+               WHERE lote=${lote} AND variable='BATCH_PRODUCIDOS' AND CAST(valor AS SIGNED) > 0 ORDER BY id`
+            )).rows.map(r => ({ n: Number(r.n), ms: Number(r.ms) }));
           }
 
           // Energía + programación de las últimas producciones (solo si se pidió la lista).
