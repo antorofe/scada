@@ -11,6 +11,7 @@ const http = require('http');
 const fs = require('fs');
 const pathm = require('path');
 const { DatabaseSync } = require('node:sqlite');
+const fabricaDb = require('./fabrica-db'); // fuente MariaDB de producción (segra / segra_fabrica)
 
 const a = process.argv.slice(2);
 const arg = (n, d) => { const i = a.indexOf('--' + n); return i >= 0 ? a[i + 1] : d; };
@@ -199,6 +200,25 @@ const server = http.createServer((req, res) => {
     }
     if (url.pathname === '/api/health') {
       return json(res, 200, { db: !!getDb(), dbPath: DB_PATH });
+    }
+    // Prueba de la fuente MariaDB de producción: conecta, consulta y responde estado.
+    // Un fallo de la BD no tumba el server: siempre responde 200 con ok:false.
+    if (url.pathname === '/api/fabrica/ping') {
+      (async () => {
+        const t0 = Date.now();
+        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        try {
+          await cli.connect();
+          const server = (await cli.query('SELECT VERSION() AS version, NOW() AS ahora, CURRENT_USER() AS usuario')).rows[0] || null;
+          const ultimaMuestra = (await cli.query(
+            'SELECT fechahora, tipo, subtipo, valor FROM segra_fabrica.data_pelleteras ORDER BY id DESC LIMIT 1'
+          )).rows[0] || null;
+          json(res, 200, { ok: true, ms: Date.now() - t0, server, ultimaMuestra });
+        } catch (e) {
+          json(res, 200, { ok: false, ms: Date.now() - t0, error: e.message });
+        } finally { cli.close(); }
+      })();
+      return;
     }
     res.writeHead(404); res.end('Not found');
   } catch (e) {

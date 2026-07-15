@@ -104,6 +104,8 @@ Segra/
 ├── server.js           Servidor web + API (lee la base)
 ├── logger.js           Adquisición Modbus + retención de datos
 ├── config.json         Ajustes (valor $/kWh)
+├── fabrica-db.js       Cliente MySQL/MariaDB puro-JS (fuente de producción, solo lectura)
+├── db.config.json      Credenciales de la BD MariaDB (no versionado)
 ├── package.json        Scripts y metadatos
 ├── pfw03.db            Base de datos SQLite (generada; no versionada)
 ├── tools/              Utilidades de diagnóstico / puesta a punto
@@ -165,6 +167,36 @@ comprimido.
 | `GET /api/export?from=&to=` | CSV del periodo (todas las columnas) |
 | `GET /api/config` · `POST` | Ajustes (valor $/kWh) |
 | `GET /api/health` | Estado de la base |
+| `GET /api/fabrica/ping` | Prueba de la fuente MariaDB de producción (estado + última muestra) |
+
+---
+
+## Fuente de datos MariaDB (producción)
+
+Además del medidor Modbus, el panel puede leer la **base de producción MariaDB**
+(`segra` / `segra_fabrica`) del servidor de planta. Se usa un **cliente MySQL escrito
+en JavaScript puro** (`fabrica-db.js`): sin dependencias ni `npm install`, coherente
+con el resto del proyecto (solo `net` + `node:crypto`, auth `mysql_native_password`).
+
+- **Solo lectura**: la conexión usa un usuario con permiso `SELECT` únicamente.
+- **Credenciales** en `db.config.json` (no versionado) o por variables de entorno
+  `FABRICA_DB_HOST/PORT/USER/PASS`:
+
+  ```json
+  { "host": "192.168.0.12", "port": 3306, "user": "scada", "password": "…", "database": "" }
+  ```
+
+- **Prueba rápida** (CLI):
+
+  ```bash
+  node fabrica-db.js                       # autotest: conecta y muestra última muestra
+  node fabrica-db.js --sql "SELECT NOW()"  # consulta ad-hoc
+  ```
+
+- **Prueba por API**: `GET /api/fabrica/ping` → `{ ok, ms, server, ultimaMuestra }`.
+
+> La tabla viva es `segra_fabrica.data_pelleteras` (pelleteras CPM/KAHL: temperatura,
+> amperaje, frecuencia de alimentador, vapor). Base para la futura sección **Proceso**.
 
 ---
 
