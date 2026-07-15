@@ -252,11 +252,20 @@
   .ptile .val small { font-size: 13px; font-weight: 600; color: var(--ink-2); }
   .progbar { height: 12px; background: color-mix(in srgb, var(--ink-2) 18%, transparent); border-radius: 999px; overflow: hidden; }
   .progfill { height: 100%; background: var(--good); border-radius: 999px; transition: width .4s ease; }
-  .prodtable { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-  .prodtable th { text-align: left; color: var(--ink-2); font-size: 11.5px; text-transform: uppercase; letter-spacing: .4px; font-weight: 700; padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-  .prodtable td { padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--ink-1); white-space: nowrap; }
+  .prodtable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .prodtable th { text-align: left; color: var(--ink-2); font-size: 10px; text-transform: uppercase; letter-spacing: .3px; font-weight: 700; padding: 6px 9px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .prodtable td { padding: 5px 9px; border-bottom: 1px solid var(--border); color: var(--ink-1); white-space: nowrap; }
   .prodtable tbody tr:hover { background: color-mix(in srgb, var(--brand-b) 5%, transparent); }
   .prodtable tr.curr { background: color-mix(in srgb, var(--good) 9%, transparent); }
+  /* Lote clickable → despliega el detalle inline */
+  .lote-cell { cursor: pointer; user-select: none; }
+  .lote-cell:hover { color: var(--brand-b); }
+  .lote-cell .caret { display: inline-block; font-size: 9px; color: var(--ink-2); transition: transform .15s; margin-right: 2px; }
+  tr.expanded .lote-cell .caret { transform: rotate(90deg); }
+  tr.expanded .lote-cell { color: var(--brand-b); }
+  .detail-row > td { background: color-mix(in srgb, var(--brand-b) 5%, transparent); padding: 6px 16px 14px; white-space: normal; }
+  .detail-inner .section-title { margin: 8px 0 6px; }
+  .detalle-total { margin-top: 9px; padding-top: 9px; border-top: 2px solid var(--border); display: flex; justify-content: space-between; font-weight: 800; color: var(--ink-1); font-size: 13px; }
   .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
   .badge.run { color: var(--good); background: color-mix(in srgb, var(--good) 15%, transparent); }
   .badge.done { color: var(--ink-2); background: color-mix(in srgb, var(--ink-2) 15%, transparent); }
@@ -274,8 +283,6 @@
   .modal-close { border: 0; background: transparent; color: var(--ink-2); font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 6px; }
   .modal-close:hover { color: var(--ink-1); background: color-mix(in srgb, var(--ink-2) 12%, transparent); }
   .modal-body { padding: 6px 20px 20px; overflow: auto; }
-  .btn-ver { border: 1px solid var(--brand-b); background: transparent; color: var(--brand-b); font: inherit; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 7px; cursor: pointer; white-space: nowrap; }
-  .btn-ver:hover { background: var(--brand-b); color: #fff; }
 </style>
 </head>
 <body>
@@ -414,10 +421,10 @@
     <div style="overflow-x:auto">
       <table class="prodtable" id="prodTable">
         <thead>
-          <tr><th>Lote</th><th>Producto</th><th>Cliente</th><th>Tipo</th><th>Formato</th><th>kg</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Batches</th><th>Energía</th><th>Costo</th><th>$/kg</th><th>Estado</th><th>Ver</th></tr>
+          <tr><th>Lote</th><th>Producto</th><th>Cliente</th><th>Tipo</th><th>Formato</th><th>kg</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Batches</th><th>Energía</th><th>Costo</th><th>$/kg</th><th>Estado</th></tr>
         </thead>
         <tbody id="prodTbody">
-          <tr><td colspan="15" style="text-align:center; color:var(--ink-2); padding:20px">Cargando…</td></tr>
+          <tr><td colspan="14" style="text-align:center; color:var(--ink-2); padding:20px">Cargando…</td></tr>
         </tbody>
       </table>
     </div>
@@ -434,20 +441,7 @@
       </div>
       <button class="modal-close" id="dtClose" title="Cerrar">✕</button>
     </div>
-    <div class="modal-body">
-      <div class="section-title" style="margin-top:2px">Tiempo transcurrido <span style="font-weight:600;text-transform:none;letter-spacing:0;color:var(--ink-muted)">· suma de periodos activos (las pausas no cuentan)</span></div>
-      <table class="prodtable">
-        <thead><tr><th>Periodo</th><th>Inicio</th><th>Fin</th><th>Duración</th></tr></thead>
-        <tbody id="dtTiempoBody"></tbody>
-      </table>
-      <div style="margin-top:10px; padding-top:10px; border-top:2px solid var(--border); display:flex; justify-content:space-between; font-weight:800; color:var(--ink-1)"><span>Total activo</span><span class="tnum" id="dtTotalVal">—</span></div>
-
-      <div class="section-title" style="margin-top:22px">Batches producidos <span id="dtBatchSub" style="font-weight:600;text-transform:none;letter-spacing:0;color:var(--ink-muted)"></span></div>
-      <table class="prodtable">
-        <thead><tr><th>N°</th><th>Contador</th><th>Hora</th><th>Min desde anterior</th><th>kg/min</th></tr></thead>
-        <tbody id="dtBatchBody"></tbody>
-      </table>
-    </div>
+    <div class="modal-body detail-inner" id="dtBody"></div>
   </div>
 </div>
 
@@ -1024,6 +1018,7 @@ const VIEWS = { dash: "#dashView", reportes: "#histView", almacen: "#almView", p
 let prodServerNow = null;
 let prodActualData = null, prodSyncLocal = 0;       // último dato en curso + ancla de reloj
 let prodTimerActual = null, prodTimerLista = null, prodTimerDur = null;
+let loteExpandido = null;                            // lote con el detalle desplegado
 function cerrarDetalle() { const m = document.getElementById("detalleModal"); if (m) m.hidden = true; }
 function showView(v) {
   if (!VIEWS[v]) v = "dash";
@@ -1204,7 +1199,7 @@ async function cargarProducciones() {
     renderProdActual(r.actual);
     renderProdLista(r.lista || [], r.actual);
   } catch (e) {
-    $("#prodTbody").innerHTML = `<tr><td colspan="15" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
+    $("#prodTbody").innerHTML = `<tr><td colspan="14" style="text-align:center; color:var(--critical); padding:20px">✗ ${e.message}</td></tr>`;
   }
 }
 // Refresco liviano SOLO de la producción en curso (AJAX cada 2 s → tiempo real).
@@ -1282,7 +1277,7 @@ function prodMetaLinea(o) {
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 
 function renderProdLista(lista, actual) {
-  if (!lista.length) { $("#prodTbody").innerHTML = `<tr><td colspan="15" style="text-align:center; color:var(--ink-2); padding:20px">Sin producciones.</td></tr>`; return; }
+  if (!lista.length) { $("#prodTbody").innerHTML = `<tr><td colspan="14" style="text-align:center; color:var(--ink-2); padding:20px">Sin producciones.</td></tr>`; return; }
   const enCursoLote = (actual && String(actual.en_marcha) === "1") ? String(actual.lote) : null;
   $("#prodTbody").innerHTML = lista.map(r => {
     const enCurso = String(r.lote) === enCursoLote;
@@ -1295,8 +1290,8 @@ function renderProdLista(lista, actual) {
     const kwh = numOrDash(r.kwh);
     const kg = numOrDash(r.kg);
     const producto = r.producto ? esc(r.producto) : (r.cod_producto != null ? "cód " + r.cod_producto : "—");
-    return `<tr class="${enCurso ? "curr" : ""}">
-      <td class="tnum"><b>${r.lote}</b></td>
+    return `<tr class="${enCurso ? "curr" : ""}" data-lote="${r.lote}" data-producto="${r.producto ? esc(r.producto) : ""}">
+      <td class="tnum lote-cell"><span class="caret">▸</span><b>${r.lote}</b></td>
       <td title="${r.cod_producto != null ? "cód " + r.cod_producto : ""}">${producto}</td>
       <td>${r.cliente ? esc(r.cliente) : "—"}</td>
       <td>${r.tipo ? esc(r.tipo) : "—"}</td>
@@ -1310,9 +1305,14 @@ function renderProdLista(lista, actual) {
       <td class="tnum">${costoEnergia(kwh)}</td>
       <td class="tnum">${costoPorKg(kwh, kg, !enCurso)}</td>
       <td>${estado}</td>
-      <td><button class="btn-ver" data-ver="${r.lote}" data-producto="${r.producto ? esc(r.producto) : ""}">Ver</button></td>
     </tr>`;
   }).join("");
+  // Reabre el detalle que estuviera desplegado antes del refresco
+  if (loteExpandido) {
+    const tr = $(`#prodTbody tr[data-lote="${loteExpandido}"]`);
+    if (tr) toggleFilaDetalle(tr, loteExpandido);
+    else loteExpandido = null;
+  }
 }
 
 function startProdPoll() {
@@ -1326,83 +1326,110 @@ function stopProdPoll() {
   prodTimerActual = prodTimerLista = prodTimerDur = null;
 }
 
-/* ---------- Modal: detalle del lote (tiempo transcurrido + batches) ---------- */
+/* ---------- Detalle del lote (tiempo transcurrido + batches) ---------- */
 function fmtHoraSeg(s) { const d = parseFecha(s); return (!d || isNaN(d)) ? "—" : d.toLocaleTimeString("es-CL", { hour12: false }); }
-async function abrirDetalle(lote, producto) {
-  if (lote == null) return;
-  $("#dtLote").textContent = lote;
-  $("#dtProducto").textContent = producto || "Cargando…";
-  $("#dtTiempoBody").innerHTML = ""; $("#dtBatchBody").innerHTML = ""; $("#dtTotalVal").textContent = "—"; $("#dtBatchSub").textContent = "";
-  $("#detalleModal").hidden = false;
-  try {
-    const r = await fetch(`/api/producciones/detalle?lote=${encodeURIComponent(lote)}`).then(x => x.json());
-    if (!r.ok) throw new Error(r.error || "sin datos");
-    $("#dtProducto").textContent = producto || "";
-    renderDetalleTiempo(r);
-    renderDetalleBatches(r);
-  } catch (e) { $("#dtProducto").textContent = "✗ " + e.message; }
-}
-function renderDetalleTiempo(r) {
+// HTML del detalle completo (dos secciones). Se usa igual en el modal y en la
+// expansión inline de la tabla.
+function detalleCompletoHtml(r) {
   const segs = (r.segmentos || []).map(s => ({
     desde: Number(s.desde), hasta: s.hasta != null ? Number(s.hasta) : null,
     desde_f: s.desde_f, hasta_f: s.hasta_f,
   }));
-  let filas = "";
+  let tFilas = "";
   segs.forEach((s, i) => {
     const abierto = s.hasta == null;
     const hasta = abierto ? serverNowMs() : s.hasta;
-    filas += `<tr>
+    tFilas += `<tr>
       <td>Producción ${i + 1}${abierto ? ' <span class="badge run" style="margin-left:4px"><span class="led" style="width:6px;height:6px;border-radius:50%;background:var(--good)"></span>en curso</span>' : ''}</td>
       <td class="tnum">${fmtFechaHora(s.desde_f)}</td>
       <td class="tnum">${abierto ? "—" : fmtFechaHora(s.hasta_f)}</td>
       <td class="tnum">${fmtDurMs(hasta - s.desde)}</td>
     </tr>`;
     const sig = segs[i + 1];
-    if (sig) filas += `<tr style="color:var(--ink-muted)">
+    if (sig) tFilas += `<tr style="color:var(--ink-muted)">
       <td>Pausa (no cuenta)</td>
       <td class="tnum">${fmtFechaHora(s.hasta_f)}</td>
       <td class="tnum">${fmtFechaHora(sig.desde_f)}</td>
       <td class="tnum">−${fmtDurMs(sig.desde - s.hasta)}</td>
     </tr>`;
   });
-  $("#dtTiempoBody").innerHTML = filas || `<tr><td colspan="4" style="text-align:center;color:var(--ink-2);padding:16px">Sin periodos.</td></tr>`;
-  $("#dtTotalVal").textContent = fmtDurMs(calcTranscurridoMs({ segmentos: r.segmentos }));
-}
-function renderDetalleBatches(r) {
+  const total = fmtDurMs(calcTranscurridoMs({ segmentos: r.segmentos }));
+
   const kgB = numOrDash(r.kg_batch);
   const bs = r.batches || [];
   let prev = r.inicio_ms != null ? Number(r.inicio_ms) : null;   // el 1º se mide desde el inicio
   let sumaKgMin = 0, cont = 0;
-  const filas = bs.map((b, i) => {
+  const bFilas = bs.map((b, i) => {
     const ms = Number(b.ms);
     const min = (prev != null) ? (ms - prev) / 60000 : null;
     const kgmin = (kgB != null && min != null && min > 0) ? kgB / min : null;
     if (kgmin != null) { sumaKgMin += kgmin; cont++; }
     prev = ms;
     return `<tr>
-      <td class="tnum">${i + 1}</td>
-      <td class="tnum">${b.n}</td>
+      <td class="tnum">${i + 1}</td><td class="tnum">${b.n}</td>
       <td class="tnum">${fmtHoraSeg(b.fecha)}</td>
       <td class="tnum">${min != null ? fmt(min, 1) + " min" : "—"}</td>
       <td class="tnum">${kgmin != null ? fmt(kgmin, 1) + " kg/min" : "—"}</td>
     </tr>`;
   }).join("");
-  $("#dtBatchBody").innerHTML = filas || `<tr><td colspan="5" style="text-align:center;color:var(--ink-2);padding:16px">Sin batches producidos.</td></tr>`;
   const prom = cont > 0 ? sumaKgMin / cont : null;
-  $("#dtBatchSub").textContent = "· " + [
+  const bSub = "· " + [
     kgB != null ? `batch ${fmt(kgB, 0)} kg` : null,
     `${bs.length} ${bs.length === 1 ? "batch" : "batches"}`,
     prom != null ? `prom. ${fmt(prom, 1)} kg/min` : null,
   ].filter(Boolean).join(" · ");
+  const muted = "font-weight:600;text-transform:none;letter-spacing:0;color:var(--ink-muted)";
+  return `
+    <div class="section-title">Tiempo transcurrido <span style="${muted}">· suma de periodos activos (las pausas no cuentan)</span></div>
+    <table class="prodtable"><thead><tr><th>Periodo</th><th>Inicio</th><th>Fin</th><th>Duración</th></tr></thead>
+      <tbody>${tFilas || '<tr><td colspan="4" style="text-align:center;color:var(--ink-2);padding:12px">Sin periodos.</td></tr>'}</tbody></table>
+    <div class="detalle-total"><span>Total activo</span><span class="tnum">${total}</span></div>
+    <div class="section-title" style="margin-top:16px">Batches producidos <span style="${muted}">${bSub}</span></div>
+    <table class="prodtable"><thead><tr><th>N°</th><th>Contador</th><th>Hora</th><th>Min desde anterior</th><th>kg/min</th></tr></thead>
+      <tbody>${bFilas || '<tr><td colspan="5" style="text-align:center;color:var(--ink-2);padding:12px">Sin batches producidos.</td></tr>'}</tbody></table>`;
+}
+async function fetchDetalle(lote) {
+  const r = await fetch(`/api/producciones/detalle?lote=${encodeURIComponent(lote)}`).then(x => x.json());
+  if (!r.ok) throw new Error(r.error || "sin datos");
+  return r;
+}
+// Modal (para los tiles de la producción en curso)
+async function abrirDetalle(lote, producto) {
+  if (lote == null) return;
+  $("#dtLote").textContent = lote;
+  $("#dtProducto").textContent = producto || "Cargando…";
+  $("#dtBody").innerHTML = '<div style="padding:16px;color:var(--ink-2)">Cargando…</div>';
+  $("#detalleModal").hidden = false;
+  try {
+    const r = await fetchDetalle(lote);
+    $("#dtProducto").textContent = producto || "";
+    $("#dtBody").innerHTML = detalleCompletoHtml(r);
+  } catch (e) { $("#dtBody").innerHTML = `<div style="padding:16px;color:var(--critical)">✗ ${e.message}</div>`; }
+}
+// Expansión inline al clickear el lote de la tabla
+async function toggleFilaDetalle(tr, lote) {
+  const sig = tr.nextElementSibling;
+  if (sig && sig.classList.contains("detail-row")) { sig.remove(); tr.classList.remove("expanded"); loteExpandido = null; return; }
+  document.querySelectorAll("#prodTbody .detail-row").forEach(el => el.remove());
+  document.querySelectorAll("#prodTbody tr.expanded").forEach(el => el.classList.remove("expanded"));
+  const dr = document.createElement("tr");
+  dr.className = "detail-row";
+  dr.innerHTML = `<td colspan="14"><div class="detail-inner">Cargando…</div></td>`;
+  tr.after(dr); tr.classList.add("expanded"); loteExpandido = String(lote);
+  try {
+    const r = await fetchDetalle(lote);
+    dr.querySelector(".detail-inner").innerHTML = detalleCompletoHtml(r);
+  } catch (e) { dr.querySelector(".detail-inner").innerHTML = `<div style="color:var(--critical)">✗ ${e.message}</div>`; }
 }
 $("#tileTranscurrido").addEventListener("click", () => { if (prodActualData) abrirDetalle(prodActualData.lote, prodActualData.producto); });
 $("#tileBatchesProd").addEventListener("click", () => { if (prodActualData) abrirDetalle(prodActualData.lote, prodActualData.producto); });
 $("#dtClose").addEventListener("click", cerrarDetalle);
 $("#detalleModal").addEventListener("click", (e) => { if (e.target === $("#detalleModal")) cerrarDetalle(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") cerrarDetalle(); });
-// Botón "Ver" de la tabla (delegación de eventos)
+// Clic en el lote → despliega/oculta el detalle inline
 $("#prodTbody").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-ver]"); if (b) abrirDetalle(b.dataset.ver, b.dataset.producto || "");
+  const cell = e.target.closest(".lote-cell"); if (!cell) return;
+  const tr = cell.closest("tr[data-lote]"); if (tr) toggleFilaDetalle(tr, tr.dataset.lote);
 });
 
 /* ---------- MySQL: prueba de conexión a la BD de producción ---------- */
