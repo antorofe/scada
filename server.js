@@ -320,7 +320,19 @@ const server = http.createServer((req, res) => {
     // La tabla es de eventos clave-valor por lote (variable/valor). 'valor' es texto,
     // así que se castea a entero para los conteos de batch. Solo lectura.
     if (url.pathname === '/api/producciones') {
-      const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '20', 10)));
+      // ?from=&to= (YYYY-MM-DD, fecha local de la BD) → filtra los lotes por su fecha
+      // de inicio de producción y sube el tope de filas. Sin rango: últimas N (limit).
+      const reDate = /^\d{4}-\d{2}-\d{2}$/;
+      const fromD = url.searchParams.get('from') || '';
+      const toD = url.searchParams.get('to') || '';
+      const hasRange = reDate.test(fromD) && reDate.test(toD);
+      const limit = hasRange
+        ? Math.min(1000, Math.max(1, parseInt(url.searchParams.get('limit') || '1000', 10)))
+        : Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '20', 10)));
+      // Condición de rango para el subquery de selección de lotes (sobre el inicio=1).
+      const rangeCond = hasRange
+        ? `AND valor='1' AND fecha >= '${fromD} 00:00:00' AND fecha <= '${toD} 23:59:59'`
+        : '';
       // ?solo=actual → solo la producción en curso (refresco liviano en tiempo real,
       // sin recalcular la lista de las últimas producciones).
       const soloActual = url.searchParams.get('solo') === 'actual';
@@ -350,7 +362,7 @@ const server = http.createServer((req, res) => {
              WHERE lote IN (
                SELECT lote FROM (
                  SELECT lote FROM segra_fabrica.data_ciclado
-                 WHERE variable='PRODUCCION_INICIADA'
+                 WHERE variable='PRODUCCION_INICIADA' ${rangeCond}
                  GROUP BY lote ORDER BY MAX(id) DESC LIMIT ${limit}
                ) t
              )
@@ -466,6 +478,378 @@ const server = http.createServer((req, res) => {
             }
           }
           json(res, 200, { ok: true, serverNow, actual, lista });
+        } catch (e) {
+          json(res, 200, { ok: false, error: e.message });
+        } finally { cli.close(); }
+      })();
+      return;
+    }
+    // Histórico de producciones por rango de fecha: resumen por tipo del $/kg
+    // (costo energético) promedio PONDERADO respecto a los kg REALIZADOS
+    // (batches producidos × kg_batch). Solo se consideran los lotes con datos:
+    // los que quedan en 0 por falta de información (sin energía medida o sin kg
+    // realizados) NO entran en el promedio. Rango en fecha local de la BD
+    // (YYYY-MM-DD), sobre el inicio de producción (PRODUCCION_INICIADA=1).
+    if (url.pathname === '/api/producciones/historico') {
+      const reDate = /^\d{4}-\d{2}-\d{2}$/;
+      const from = url.searchParams.get('from') || '';
+      const to = url.searchParams.get('to') || '';
+      if (!reDate.test(from) || !reDate.test(to)) {
+        return json(res, 400, { ok: false, error: 'fechas inválidas (se espera YYYY-MM-DD)' });
+      }
+      const desde = `${from} 00:00:00`, hasta = `${to} 23:59:59`;
+      // Solo estos tipos entran al resumen (los demás, p. ej. GRANO, se ignoran).
+      const TIPOS = ['PELLET', 'MOLIDO', 'MOLIDO MONOPRODUCTO'];
+      (async () => {
+        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        try {
+          await cli.connect();
+          const serverNow = (await cli.query('SELECT NOW() AS now')).rows[0].now;
+          const ahora = Date.now();
+          // Lote realmente EN MARCHA = el del último evento PRODUCCION_INICIADA si es
+          // valor='1'. Solo ese cierra sus tramos en "ahora"; los demás lotes usan su
+          // último evento. Sin esto, un lote abandonado con un inicio (=1) sin cierre
+          // (=0) se tomaría como "en curso" y barrería energía hasta ahora (kWh irreal).
+          const ultIni = (await cli.query(
+            "SELECT lote, valor FROM segra_fabrica.data_ciclado WHERE variable='PRODUCCION_INICIADA' ORDER BY id DESC LIMIT 1"
+          )).rows[0];
+          const runningLote = (ultIni && String(ultIni.valor) === '1') ? String(parseInt(ultIni.lote, 10)) : null;
+          // Lotes cuyo inicio de producción cae dentro del rango. last_ms = último
+          // evento del lote (firma/cierre de energía para lotes terminados).
+          const lista = (await cli.query(
+            `SELECT lote,
+                MIN(CASE WHEN variable='PRODUCCION_INICIADA' AND valor='1' THEN fecha END) AS inicio,
+                UNIX_TIMESTAMP(MAX(fecha))*1000 AS last_ms
+             FROM segra_fabrica.data_ciclado
+             WHERE lote IN (
+               SELECT DISTINCT lote FROM segra_fabrica.data_ciclado
+               WHERE variable='PRODUCCION_INICIADA' AND valor='1'
+                 AND fecha >= '${desde}' AND fecha <= '${hasta}'
+             )
+             GROUP BY lote ORDER BY inicio DESC`
+          )).rows;
+
+          const resumen = {};
+          for (const t of TIPOS) resumen[t] = { tipo: t, lotes: 0, kg: 0, costo: 0, kwh: 0 };
+          const detalle = [];
+          let considerados = 0, excluidos = 0;
+
+          if (lista.length) {
+            const lotes = lista.map(r => Number(r.lote)).filter(n => !isNaN(n));
+            // Eventos PRODUCCION_INICIADA de todos los lotes (para los tramos activos).
+            const eventosPorLote = {};
+            const evs = (await cli.query(
+              `SELECT lote, valor, UNIX_TIMESTAMP(fecha)*1000 AS ms FROM segra_fabrica.data_ciclado
+               WHERE variable='PRODUCCION_INICIADA' AND lote IN (${lotes.join(',')}) ORDER BY lote, id`
+            )).rows;
+            for (const ev of evs) (eventosPorLote[String(ev.lote)] ||= []).push(ev);
+            // Programación (kg_batch, tipo) de cada lote.
+            const progPorLote = {};
+            const prog = (await cli.query(
+              `SELECT lote, kg_batch, tipo FROM segra.programacion WHERE lote IN (${lotes.join(',')})`
+            )).rows;
+            for (const p of prog) progPorLote[String(p.lote)] = p;
+            // Eventos de batch por lote → producidos corregidos por reinicios.
+            const batchPorLote = {};
+            const bevs = (await cli.query(
+              `SELECT lote, variable, CAST(valor AS SIGNED) AS v FROM segra_fabrica.data_ciclado
+               WHERE variable IN ('BATCH_PRODUCIDOS','BATCH_PROGRAMADOS') AND lote IN (${lotes.join(',')})
+               ORDER BY lote, id`
+            )).rows;
+            for (const e of bevs) {
+              const b = (batchPorLote[String(e.lote)] ||= { prod: [], prog: [] });
+              (e.variable === 'BATCH_PRODUCIDOS' ? b.prod : b.prog).push(Number(e.v));
+            }
+
+            for (const row of lista) {
+              const key = String(row.lote);
+              const p = progPorLote[key];
+              const tipo = p ? p.tipo : null;
+              // Fuera del resumen: tipos no pedidos (GRANO, etc.) o sin programación.
+              if (!tipo || !TIPOS.includes(tipo)) continue;
+              const evsL = eventosPorLote[key] || [];
+              const enCurso = key === runningLote;   // solo el lote realmente en marcha
+              const cierre = enCurso ? ahora : (row.last_ms != null ? Number(row.last_ms) : null);
+              const tramos = tramosActivos(evsL, cierre);
+              // Energía: en curso se calcula en vivo; terminado usa la caché por firma.
+              const kwh = enCurso
+                ? energiaTramos(tramos).kwh
+                : (tramos.length ? energiaLoteActivaGuardada(Number(row.lote), tramos, cierre) : 0);
+              const b = batchPorLote[key];
+              const cb = b ? calcBatches(b.prod, b.prog) : { producidos: null };
+              const kgBatch = p.kg_batch != null ? Number(p.kg_batch) : null;
+              const producidos = cb.producidos != null ? Number(cb.producidos) : null;
+              const kgReal = (kgBatch != null && producidos != null) ? producidos * kgBatch : 0;
+              const costo = (kwh || 0) * (config.kwhValue || 0);
+              // Lote válido = tiene energía medida (>0) y kg realizados (>0).
+              // Los que quedan en 0 por falta de datos no entran al promedio.
+              const valido = kwh > 0 && kgReal > 0;
+              if (!valido) { excluidos++; continue; }
+              considerados++;
+              const g = resumen[tipo];
+              g.lotes++; g.kg += kgReal; g.costo += costo; g.kwh += kwh;
+              detalle.push({
+                lote: Number(row.lote), tipo, inicio: row.inicio,
+                producidos, kg_batch: kgBatch, kg: kgReal, kwh, costo, perKg: costo / kgReal,
+              });
+            }
+          }
+
+          const resumenArr = TIPOS.map(t => {
+            const g = resumen[t];
+            return { tipo: t, lotes: g.lotes, kg: g.kg, kwh: g.kwh, costo: g.costo,
+                     perKg: g.kg > 0 ? g.costo / g.kg : null };
+          });
+          json(res, 200, {
+            ok: true, from, to, serverNow,
+            kwhValue: config.kwhValue, currency: config.currency,
+            resumen: resumenArr, detalle,
+            totalLotes: lista.length, considerados, excluidos,
+          });
+        } catch (e) {
+          json(res, 200, { ok: false, error: e.message });
+        } finally { cli.close(); }
+      })();
+      return;
+    }
+    // Comparativa de un producto: rendimiento (kg/h) y costo ($/kg) del lote pedido
+    // frente a (a) la historia del MISMO cod_producto y (b) los otros cod_producto del
+    // MISMO tipo y formato. kg/h sale de los eventos (hay historia larga); $/kg solo
+    // existe donde hay energía medida (ventana del medidor / caché), así que muchos
+    // lotes antiguos muestran $/kg vacío — con el tiempo se irá poblando.
+    if (url.pathname === '/api/producciones/comparativa') {
+      const lote = parseInt(url.searchParams.get('lote') || '', 10);
+      if (!Number.isInteger(lote)) { return json(res, 400, { ok: false, error: 'lote inválido' }); }
+      const LIM_COD = 60;   // lotes recientes del mismo cod_producto + tipo + formato
+      // Escapa una cadena para MySQL (comillas y backslash). Los valores vienen de la
+      // propia BD, pero se escapan igual por seguridad.
+      const sqlStr = v => "'" + String(v).replace(/[\\']/g, c => '\\' + c) + "'";
+      const eq = (col, v) => (v == null ? `${col} IS NULL` : `${col}=${sqlStr(v)}`);
+      (async () => {
+        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        try {
+          await cli.connect();
+          const serverNow = (await cli.query('SELECT NOW() AS now')).rows[0].now;
+          const ahora = Date.now();
+          // Programación del lote de referencia.
+          const ref = (await cli.query(
+            `SELECT pg.lote, pg.cod_producto, pr.nombre AS producto, pg.tipo, pg.formato,
+                    pg.kg_batch, pg.kg_produccion AS kg
+             FROM segra.programacion pg LEFT JOIN segra.productos pr ON pr.id=pg.cod_producto
+             WHERE pg.lote=${lote} LIMIT 1`
+          )).rows[0];
+          if (!ref) { return json(res, 200, { ok: false, error: 'lote sin programación' }); }
+          // Lote realmente en marcha (cierre correcto de tramos; ver /historico).
+          const ultIni = (await cli.query(
+            "SELECT lote, valor FROM segra_fabrica.data_ciclado WHERE variable='PRODUCCION_INICIADA' ORDER BY id DESC LIMIT 1"
+          )).rows[0];
+          const runningLote = (ultIni && String(ultIni.valor) === '1') ? String(parseInt(ultIni.lote, 10)) : null;
+          // Candidatos = lotes PRODUCIDOS del MISMO cod_producto + tipo + formato
+          // (recientes). La comparación es del producto contra sí mismo.
+          const producidosSub = "(SELECT DISTINCT lote FROM segra_fabrica.data_ciclado WHERE variable='PRODUCCION_INICIADA' AND valor='1')";
+          const candCod = (await cli.query(
+            `SELECT pg.lote FROM segra.programacion pg
+             JOIN ${producidosSub} dc ON dc.lote=pg.lote
+             WHERE ${eq('pg.cod_producto', ref.cod_producto)}
+               AND ${eq('pg.tipo', ref.tipo)} AND ${eq('pg.formato', ref.formato)}
+             ORDER BY pg.lote DESC LIMIT ${LIM_COD}`
+          )).rows;
+          const set = new Set();
+          for (const r of candCod) set.add(Number(r.lote));
+          set.add(lote);
+          const lotes = [...set].filter(n => !isNaN(n));
+
+          // Datos en bloque para todos los candidatos.
+          const eventosPorLote = {};
+          const evs = (await cli.query(
+            `SELECT lote, valor, UNIX_TIMESTAMP(fecha)*1000 AS ms FROM segra_fabrica.data_ciclado
+             WHERE variable='PRODUCCION_INICIADA' AND lote IN (${lotes.join(',')}) ORDER BY lote, id`
+          )).rows;
+          for (const ev of evs) (eventosPorLote[String(ev.lote)] ||= []).push(ev);
+          const lastMs = {}, inicioF = {};
+          const meta = (await cli.query(
+            `SELECT lote, UNIX_TIMESTAMP(MAX(fecha))*1000 AS last_ms,
+                    MIN(CASE WHEN variable='PRODUCCION_INICIADA' AND valor='1' THEN fecha END) AS inicio
+             FROM segra_fabrica.data_ciclado WHERE lote IN (${lotes.join(',')}) GROUP BY lote`
+          )).rows;
+          for (const m of meta) { lastMs[String(m.lote)] = m.last_ms; inicioF[String(m.lote)] = m.inicio; }
+          const progPorLote = {};
+          const prog = (await cli.query(
+            `SELECT pg.lote, pg.cod_producto, pr.nombre AS producto, pg.kg_batch
+             FROM segra.programacion pg LEFT JOIN segra.productos pr ON pr.id=pg.cod_producto
+             WHERE pg.lote IN (${lotes.join(',')})`
+          )).rows;
+          for (const p of prog) progPorLote[String(p.lote)] = p;
+          const batchPorLote = {};
+          const bevs = (await cli.query(
+            `SELECT lote, variable, CAST(valor AS SIGNED) AS v FROM segra_fabrica.data_ciclado
+             WHERE variable IN ('BATCH_PRODUCIDOS','BATCH_PROGRAMADOS') AND lote IN (${lotes.join(',')})
+             ORDER BY lote, id`
+          )).rows;
+          for (const e of bevs) {
+            const b = (batchPorLote[String(e.lote)] ||= { prod: [], prog: [] });
+            (e.variable === 'BATCH_PRODUCIDOS' ? b.prod : b.prog).push(Number(e.v));
+          }
+
+          // Métricas por lote: kg realizados, horas activas, kg/h, kWh y $/kg.
+          const metrica = (l) => {
+            const key = String(l);
+            const p = progPorLote[key];
+            const evsL = eventosPorLote[key] || [];
+            const enCurso = key === runningLote;
+            const cierre = enCurso ? ahora : (lastMs[key] != null ? Number(lastMs[key]) : null);
+            const tramos = tramosActivos(evsL, cierre);
+            const activoMs = tramos.reduce((a, t) => a + Math.max(0, t[1] - t[0]), 0);
+            const kwh = enCurso
+              ? energiaTramos(tramos).kwh
+              : (tramos.length ? energiaLoteActivaGuardada(l, tramos, cierre) : 0);
+            const b = batchPorLote[key];
+            const cb = b ? calcBatches(b.prod, b.prog) : { producidos: null };
+            const kgBatch = p && p.kg_batch != null ? Number(p.kg_batch) : null;
+            const producidos = cb.producidos != null ? Number(cb.producidos) : null;
+            const kgReal = (kgBatch != null && producidos != null) ? producidos * kgBatch : 0;
+            const activoH = activoMs / 3600000;
+            const kgh = (kgReal > 0 && activoH > 0) ? kgReal / activoH : null;
+            const costo = (kwh || 0) * (config.kwhValue || 0);
+            const perKg = (kwh > 0 && kgReal > 0) ? costo / kgReal : null;
+            return {
+              lote: l, cod_producto: p ? p.cod_producto : null, producto: p ? p.producto : null,
+              inicio: inicioF[key] || null, producidos, kg_batch: kgBatch, kg: kgReal,
+              activoH, kwh, costo, kgh, perKg, enCurso,
+            };
+          };
+          const porLote = {};
+          for (const l of lotes) porLote[String(l)] = metrica(l);
+
+          // Agrega una lista de métricas: kg/h ponderado (Σkg/Σh) y $/kg ponderado (Σcosto/Σkg).
+          const agg = (items) => {
+            let kgKgh = 0, hKgh = 0, costoE = 0, kgE = 0, nKgh = 0, nE = 0, totKg = 0;
+            for (const m of items) {
+              totKg += m.kg || 0;
+              if (m.kgh != null) { kgKgh += m.kg; hKgh += m.activoH; nKgh++; }
+              if (m.perKg != null) { costoE += m.costo; kgE += m.kg; nE++; }
+            }
+            return { n: items.length, nKgh, nEnergia: nE,
+                     avgKgh: hKgh > 0 ? kgKgh / hKgh : null,
+                     avgPerKg: kgE > 0 ? costoE / kgE : null, totKg };
+          };
+
+          const refM = porLote[String(lote)];
+          // Historia del mismo cod_producto + tipo + formato (incluye el lote de
+          // referencia), de la más reciente a la más antigua.
+          const mismosItems = lotes.map(l => porLote[String(l)])
+            .filter(Boolean)
+            .sort((a, b) => b.lote - a.lote);
+          const mismoProducto = { ...agg(mismosItems), lotes: mismosItems.slice(0, LIM_COD) };
+
+          json(res, 200, {
+            ok: true, serverNow, kwhValue: config.kwhValue, currency: config.currency,
+            lote, cod_producto: ref.cod_producto, producto: ref.producto,
+            tipo: ref.tipo, formato: ref.formato,
+            ref: refM, mismoProducto,
+          });
+        } catch (e) {
+          json(res, 200, { ok: false, error: e.message });
+        } finally { cli.close(); }
+      })();
+      return;
+    }
+    // Promedio de kg/h por producto (cod_producto + tipo + formato) para los lotes
+    // pedidos. Sirve para mostrar, junto al kg/h de cada fila de la tabla, cuánto se
+    // desvía del promedio de ese mismo producto. Solo usa eventos (sin energía), así
+    // que es liviano; el cliente lo cachea por producto.
+    if (url.pathname === '/api/producciones/kghprom') {
+      const req = (url.searchParams.get('lotes') || '').split(',')
+        .map(s => parseInt(s, 10)).filter(Number.isInteger);
+      if (!req.length) { return json(res, 200, { ok: true, prom: {} }); }
+      const lotesReq = [...new Set(req)];
+      const LIM = 40;   // lotes recientes por producto para el promedio
+      const tkey = (c, t, f) => [c, t, f].map(x => x == null ? '' : x).join('|');
+      const sqlStr = v => "'" + String(v).replace(/[\\']/g, c => '\\' + c) + "'";
+      const eq = (col, v) => (v == null ? `${col} IS NULL` : `${col}=${sqlStr(v)}`);
+      (async () => {
+        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        try {
+          await cli.connect();
+          const ahora = Date.now();
+          // Producto (cod+tipo+formato) de cada lote pedido → triples distintos.
+          const prog0 = (await cli.query(
+            `SELECT lote, cod_producto, tipo, formato FROM segra.programacion WHERE lote IN (${lotesReq.join(',')})`
+          )).rows;
+          const triples = new Map();
+          for (const r of prog0) triples.set(tkey(r.cod_producto, r.tipo, r.formato),
+            { cod: r.cod_producto, tipo: r.tipo, formato: r.formato });
+          if (!triples.size) { return json(res, 200, { ok: true, prom: {} }); }
+          const ultIni = (await cli.query(
+            "SELECT lote, valor FROM segra_fabrica.data_ciclado WHERE variable='PRODUCCION_INICIADA' ORDER BY id DESC LIMIT 1"
+          )).rows[0];
+          const runningLote = (ultIni && String(ultIni.valor) === '1') ? String(parseInt(ultIni.lote, 10)) : null;
+          const producidosSub = "(SELECT DISTINCT lote FROM segra_fabrica.data_ciclado WHERE variable='PRODUCCION_INICIADA' AND valor='1')";
+          // Lotes recientes de cada producto.
+          const histPorTriple = {}; const allHist = new Set();
+          for (const [k, t] of triples) {
+            const hl = (await cli.query(
+              `SELECT pg.lote FROM segra.programacion pg
+               JOIN ${producidosSub} dc ON dc.lote=pg.lote
+               WHERE ${eq('pg.cod_producto', t.cod)} AND ${eq('pg.tipo', t.tipo)} AND ${eq('pg.formato', t.formato)}
+               ORDER BY pg.lote DESC LIMIT ${LIM}`
+            )).rows.map(x => Number(x.lote));
+            histPorTriple[k] = hl; hl.forEach(l => allHist.add(l));
+          }
+          const lotes = [...allHist];
+          if (!lotes.length) { return json(res, 200, { ok: true, prom: {} }); }
+          // Datos en bloque de todos los lotes de historia.
+          const eventosPorLote = {}, lastMs = {}, kgBatchPorLote = {}, batchPorLote = {};
+          const evs = (await cli.query(
+            `SELECT lote, valor, UNIX_TIMESTAMP(fecha)*1000 AS ms FROM segra_fabrica.data_ciclado
+             WHERE variable='PRODUCCION_INICIADA' AND lote IN (${lotes.join(',')}) ORDER BY lote, id`
+          )).rows;
+          for (const ev of evs) (eventosPorLote[String(ev.lote)] ||= []).push(ev);
+          const meta = (await cli.query(
+            `SELECT lote, UNIX_TIMESTAMP(MAX(fecha))*1000 AS last_ms FROM segra_fabrica.data_ciclado
+             WHERE lote IN (${lotes.join(',')}) GROUP BY lote`
+          )).rows;
+          for (const m of meta) lastMs[String(m.lote)] = m.last_ms;
+          const prog = (await cli.query(
+            `SELECT lote, kg_batch FROM segra.programacion WHERE lote IN (${lotes.join(',')})`
+          )).rows;
+          for (const p of prog) kgBatchPorLote[String(p.lote)] = p.kg_batch;
+          const bevs = (await cli.query(
+            `SELECT lote, variable, CAST(valor AS SIGNED) AS v FROM segra_fabrica.data_ciclado
+             WHERE variable IN ('BATCH_PRODUCIDOS','BATCH_PROGRAMADOS') AND lote IN (${lotes.join(',')})
+             ORDER BY lote, id`
+          )).rows;
+          for (const e of bevs) {
+            const b = (batchPorLote[String(e.lote)] ||= { prod: [], prog: [] });
+            (e.variable === 'BATCH_PRODUCIDOS' ? b.prod : b.prog).push(Number(e.v));
+          }
+          // kg realizados y horas activas por lote (kg/h no necesita energía).
+          const porLote = {};
+          for (const l of lotes) {
+            const key = String(l);
+            const evsL = eventosPorLote[key] || [];
+            const enCurso = key === runningLote;
+            const cierre = enCurso ? ahora : (lastMs[key] != null ? Number(lastMs[key]) : null);
+            const tramos = tramosActivos(evsL, cierre);
+            const activoH = tramos.reduce((a, t) => a + Math.max(0, t[1] - t[0]), 0) / 3600000;
+            const b = batchPorLote[key];
+            const cb = b ? calcBatches(b.prod, b.prog) : { producidos: null };
+            const kgBatch = kgBatchPorLote[key] != null ? Number(kgBatchPorLote[key]) : null;
+            const producidos = cb.producidos != null ? Number(cb.producidos) : null;
+            const kgReal = (kgBatch != null && producidos != null) ? producidos * kgBatch : 0;
+            porLote[key] = { kg: kgReal, activoH, valido: kgReal > 0 && activoH > 0 };
+          }
+          // Promedio ponderado (Σkg/Σh) por producto.
+          const prom = {};
+          for (const [k] of triples) {
+            let sk = 0, sh = 0;
+            for (const l of (histPorTriple[k] || [])) {
+              const m = porLote[String(l)];
+              if (m && m.valido) { sk += m.kg; sh += m.activoH; }
+            }
+            prom[k] = sh > 0 ? sk / sh : null;
+          }
+          json(res, 200, { ok: true, prom });
         } catch (e) {
           json(res, 200, { ok: false, error: e.message });
         } finally { cli.close(); }
