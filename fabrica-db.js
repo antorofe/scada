@@ -141,7 +141,7 @@ function parseErr(payload) {
 
 // ---- Cliente ----
 class MySQLClient {
-  constructor(cfg) { this.cfg = cfg; this.socket = null; this.reader = null; }
+  constructor(cfg) { this.cfg = cfg; this.socket = null; this.reader = null; this.alive = false; }
 
   connect() {
     return new Promise((resolve, reject) => {
@@ -157,10 +157,15 @@ class MySQLClient {
         sock.removeListener('error', reject);
         this.socket = sock;
         this.reader = new PacketReader(sock);
+        // La conexión muere si el socket se cierra o falla (p. ej. wait_timeout de
+        // MariaDB). El pool consulta `alive` para descartar conexiones muertas.
+        sock.on('close', () => { this.alive = false; });
+        sock.on('error', () => { this.alive = false; });
         try {
           await this._handshake();
           sock.removeListener('timeout', onTimeout);
           sock.setTimeout(0);                       // sin timeout de inactividad tras autenticar
+          this.alive = true;
           resolve(this);
         } catch (e) { try { sock.destroy(); } catch (_) {} reject(e); }
       });
@@ -250,9 +255,125 @@ class MySQLClient {
   }
 
   close() {
+    this.alive = false;
     try { writePacket(this.socket, 0, Buffer.from([0x01])); } catch (_) {}  // COM_QUIT
     try { this.socket.destroy(); } catch (_) {}
     this.socket = null;
+  }
+}
+
+// ---- Pool de conexiones ----
+// Reutiliza conexiones ya autenticadas entre peticiones, evitando el coste de
+// TCP + handshake + auth `mysql_native_password` en cada request. Acota el número de
+// conexiones (con cola de espera) y mantiene la salud del pool: descarta las muertas
+// (cerradas por `wait_timeout` de MariaDB, errores de red…) y las ociosas antiguas se
+// validan con un ping antes de reutilizarse. Uso:
+//   const pool = new MySQLPool(loadDbConfig(), { max: 4 });
+//   const cli = await pool.acquire();
+//   try { await cli.query(...); } finally { pool.release(cli); }
+class MySQLPool {
+  constructor(cfg, opts = {}) {
+    this.cfg = cfg;
+    this.max = opts.max || 4;                             // conexiones simultáneas máx.
+    this.idleMs = opts.idleMs || 30000;                  // cierra una conexión ociosa > 30 s
+    this.validateAfterMs = opts.validateAfterMs || 5000; // ping si estuvo ociosa > 5 s
+    this.acquireTimeoutMs = opts.acquireTimeoutMs || 12000;
+    this.idle = [];         // [{ client, releasedAt }] conexiones libres y sanas
+    this.busy = new Set();  // conexiones prestadas
+    this.waiters = [];      // [{ resolve, reject, timer }] a la espera de una conexión
+    this.closing = false;
+    this._sweep = setInterval(() => this._evictIdle(), 10000);
+    if (this._sweep.unref) this._sweep.unref();
+  }
+  get size() { return this.idle.length + this.busy.size; }
+
+  // Corre una promesa con límite de tiempo (evita que un ping colgado bloquee el pool).
+  _withTimeout(promise, ms) {
+    let t;
+    const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error('timeout')), ms); if (t.unref) t.unref(); });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+  }
+
+  async acquire() {
+    if (this.closing) throw new Error('pool cerrado');
+    // 1) Reutiliza una conexión ociosa sana (validándola si lleva rato parada).
+    while (this.idle.length) {
+      const e = this.idle.pop();
+      if (!e.client.alive) { try { e.client.close(); } catch (_) {} continue; }
+      if (Date.now() - e.releasedAt > this.validateAfterMs) {
+        try { await this._withTimeout(e.client.query('SELECT 1'), 3000); }
+        catch (_) { try { e.client.close(); } catch (_) {} continue; }
+        if (!e.client.alive) continue;
+      }
+      this.busy.add(e.client);
+      return e.client;
+    }
+    // 2) Crea una nueva si hay cupo (reserva el cupo antes de conectar).
+    if (this.size < this.max) {
+      const client = new MySQLClient(this.cfg);
+      this.busy.add(client);
+      try { await client.connect(); return client; }
+      catch (e) { this.busy.delete(client); throw e; }
+    }
+    // 3) Sin cupo: espera a que se libere una (con timeout).
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const i = this.waiters.findIndex(w => w.timer === timer);
+        if (i >= 0) this.waiters.splice(i, 1);
+        reject(new Error('timeout esperando conexión del pool'));
+      }, this.acquireTimeoutMs);
+      if (timer.unref) timer.unref();
+      this.waiters.push({ resolve, reject, timer });
+    });
+  }
+
+  release(client) {
+    if (!this.busy.delete(client)) return;   // no era del pool o ya se liberó
+    if (this.closing || !client.alive) {
+      try { client.close(); } catch (_) {}
+      this._pumpWaiters();
+      return;
+    }
+    // Recién usada y viva: si alguien espera, entrégasela directo (sin re-validar).
+    const w = this.waiters.shift();
+    if (w) { clearTimeout(w.timer); this.busy.add(client); w.resolve(client); return; }
+    this.idle.push({ client, releasedAt: Date.now() });
+  }
+
+  // Tras descartar conexiones muertas, crea nuevas para quien siga esperando.
+  _pumpWaiters() {
+    while (this.waiters.length && this.size < this.max) {
+      const w = this.waiters.shift();
+      clearTimeout(w.timer);
+      this.acquire().then(w.resolve, w.reject);
+    }
+  }
+
+  _evictIdle() {
+    if (!this.idle.length) return;
+    const now = Date.now();
+    this.idle = this.idle.filter(e => {
+      if (!e.client.alive || now - e.releasedAt > this.idleMs) {
+        try { e.client.close(); } catch (_) {} return false;
+      }
+      return true;
+    });
+  }
+
+  // Ejecuta fn(cli) con una conexión del pool y la libera siempre.
+  async run(fn) {
+    const cli = await this.acquire();
+    try { return await fn(cli); }
+    finally { this.release(cli); }
+  }
+
+  close() {
+    this.closing = true;
+    clearInterval(this._sweep);
+    for (const e of this.idle) { try { e.client.close(); } catch (_) {} }
+    this.idle = [];
+    for (const w of this.waiters) { clearTimeout(w.timer); w.reject(new Error('pool cerrado')); }
+    this.waiters = [];
   }
 }
 
@@ -265,7 +386,7 @@ async function queryOnce(sql, cfgOverride) {
   finally { cli.close(); }
 }
 
-module.exports = { MySQLClient, queryOnce, loadDbConfig };
+module.exports = { MySQLClient, MySQLPool, queryOnce, loadDbConfig };
 
 // ---- CLI de autotest ----
 if (require.main === module) {

@@ -12,6 +12,10 @@ const fs = require('fs');
 const pathm = require('path');
 const { DatabaseSync } = require('node:sqlite');
 const fabricaDb = require('./fabrica-db'); // fuente MariaDB de producción (segra / segra_fabrica)
+// Pool de conexiones a MariaDB: reutiliza conexiones autenticadas entre peticiones
+// (el poll de producciones + comparativas abren muchas consultas). La config se lee
+// una vez al arrancar; si cambia db.config.json, reiniciar el servicio.
+const fabricaPool = new fabricaDb.MySQLPool(fabricaDb.loadDbConfig(), { max: 4 });
 
 const a = process.argv.slice(2);
 const arg = (n, d) => { const i = a.indexOf('--' + n); return i >= 0 ? a[i + 1] : d; };
@@ -302,9 +306,9 @@ const server = http.createServer((req, res) => {
       (async () => {
         const t0 = Date.now();
         const dbcfg = fabricaDb.loadDbConfig();
-        const cli = new fabricaDb.MySQLClient(dbcfg);
+        let cli;
         try {
-          await cli.connect();
+          cli = await fabricaPool.acquire();
           const server = (await cli.query('SELECT VERSION() AS version, NOW() AS ahora, CURRENT_USER() AS usuario')).rows[0] || null;
           const ultimaMuestra = (await cli.query(
             'SELECT fechahora, tipo, subtipo, valor FROM segra_fabrica.data_pelleteras ORDER BY id DESC LIMIT 1'
@@ -312,7 +316,7 @@ const server = http.createServer((req, res) => {
           json(res, 200, { ok: true, ms: Date.now() - t0, host: dbcfg.host, port: dbcfg.port || 3306, server, ultimaMuestra });
         } catch (e) {
           json(res, 200, { ok: false, ms: Date.now() - t0, host: dbcfg.host, port: dbcfg.port || 3306, error: e.message });
-        } finally { cli.close(); }
+        } finally { if (cli) fabricaPool.release(cli); }
       })();
       return;
     }
@@ -337,9 +341,9 @@ const server = http.createServer((req, res) => {
       // sin recalcular la lista de las últimas producciones).
       const soloActual = url.searchParams.get('solo') === 'actual';
       (async () => {
-        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        let cli;
         try {
-          await cli.connect();
+          cli = await fabricaPool.acquire();
           // Hora del propio servidor de BD: el cliente calcula el "transcurrido" contra
           // esta referencia (no contra el reloj del navegador, que puede diferir).
           const serverNow = (await cli.query('SELECT NOW() AS now')).rows[0].now;
@@ -480,7 +484,7 @@ const server = http.createServer((req, res) => {
           json(res, 200, { ok: true, serverNow, actual, lista });
         } catch (e) {
           json(res, 200, { ok: false, error: e.message });
-        } finally { cli.close(); }
+        } finally { if (cli) fabricaPool.release(cli); }
       })();
       return;
     }
@@ -501,9 +505,9 @@ const server = http.createServer((req, res) => {
       // Solo estos tipos entran al resumen (los demás, p. ej. GRANO, se ignoran).
       const TIPOS = ['PELLET', 'MOLIDO', 'MOLIDO MONOPRODUCTO'];
       (async () => {
-        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        let cli;
         try {
-          await cli.connect();
+          cli = await fabricaPool.acquire();
           const serverNow = (await cli.query('SELECT NOW() AS now')).rows[0].now;
           const ahora = Date.now();
           // Lote realmente EN MARCHA = el del último evento PRODUCCION_INICIADA si es
@@ -608,7 +612,7 @@ const server = http.createServer((req, res) => {
           });
         } catch (e) {
           json(res, 200, { ok: false, error: e.message });
-        } finally { cli.close(); }
+        } finally { if (cli) fabricaPool.release(cli); }
       })();
       return;
     }
@@ -626,9 +630,9 @@ const server = http.createServer((req, res) => {
       const sqlStr = v => "'" + String(v).replace(/[\\']/g, c => '\\' + c) + "'";
       const eq = (col, v) => (v == null ? `${col} IS NULL` : `${col}=${sqlStr(v)}`);
       (async () => {
-        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        let cli;
         try {
-          await cli.connect();
+          cli = await fabricaPool.acquire();
           const serverNow = (await cli.query('SELECT NOW() AS now')).rows[0].now;
           const ahora = Date.now();
           // Programación del lote de referencia.
@@ -750,7 +754,7 @@ const server = http.createServer((req, res) => {
           });
         } catch (e) {
           json(res, 200, { ok: false, error: e.message });
-        } finally { cli.close(); }
+        } finally { if (cli) fabricaPool.release(cli); }
       })();
       return;
     }
@@ -768,9 +772,9 @@ const server = http.createServer((req, res) => {
       const sqlStr = v => "'" + String(v).replace(/[\\']/g, c => '\\' + c) + "'";
       const eq = (col, v) => (v == null ? `${col} IS NULL` : `${col}=${sqlStr(v)}`);
       (async () => {
-        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        let cli;
         try {
-          await cli.connect();
+          cli = await fabricaPool.acquire();
           const ahora = Date.now();
           // Producto (cod+tipo+formato) de cada lote pedido → triples distintos.
           const prog0 = (await cli.query(
@@ -852,7 +856,7 @@ const server = http.createServer((req, res) => {
           json(res, 200, { ok: true, prom });
         } catch (e) {
           json(res, 200, { ok: false, error: e.message });
-        } finally { cli.close(); }
+        } finally { if (cli) fabricaPool.release(cli); }
       })();
       return;
     }
@@ -863,9 +867,9 @@ const server = http.createServer((req, res) => {
       const lote = parseInt(url.searchParams.get('lote') || '', 10);
       if (!Number.isInteger(lote)) { return json(res, 400, { ok: false, error: 'lote inválido' }); }
       (async () => {
-        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        let cli;
         try {
-          await cli.connect();
+          cli = await fabricaPool.acquire();
           const serverNow = (await cli.query('SELECT NOW() AS now')).rows[0].now;
           const kgBatch = (await cli.query(
             `SELECT kg_batch, tipo FROM segra.programacion WHERE lote=${lote} LIMIT 1`
@@ -896,7 +900,7 @@ const server = http.createServer((req, res) => {
           });
         } catch (e) {
           json(res, 200, { ok: false, error: e.message });
-        } finally { cli.close(); }
+        } finally { if (cli) fabricaPool.release(cli); }
       })();
       return;
     }
@@ -911,9 +915,9 @@ const server = http.createServer((req, res) => {
         return json(res, 400, { ok: false, error: 'rango inválido' });
       }
       (async () => {
-        const cli = new fabricaDb.MySQLClient(fabricaDb.loadDbConfig());
+        let cli;
         try {
-          await cli.connect();
+          cli = await fabricaPool.acquire();
           const fromS = Math.floor(from / 1000), toS = Math.floor(to / 1000);
           const bucket = Math.max(2, Math.ceil((toS - fromS) / 600)); // ~600 puntos/serie
           const cond = `tipo IN ('AMPERAJE','TEMPERATURA') AND subtipo IN ('CPM','KAHL')
@@ -940,7 +944,7 @@ const server = http.createServer((req, res) => {
           json(res, 200, { ok: true, bucket, cpm: out.cpm, kahl: out.kahl });
         } catch (e) {
           json(res, 200, { ok: false, error: e.message });
-        } finally { cli.close(); }
+        } finally { if (cli) fabricaPool.release(cli); }
       })();
       return;
     }
